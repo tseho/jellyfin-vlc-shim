@@ -63,6 +63,25 @@ type WebSocketMessage struct {
 	Data        interface{} `json:"Data,omitempty"`
 }
 
+type PlayCommandData struct {
+	ControllingUserId string   `json:"ControllingUserId"`
+	ItemIds           []string `json:"ItemIds"`
+	PlayCommand       string   `json:"PlayCommand"`
+}
+
+type ItemInfo struct {
+	Id           string        `json:"Id"`
+	Name         string        `json:"Name"`
+	Type         string        `json:"Type"`
+	MediaSources []MediaSource `json:"MediaSources"`
+}
+
+type MediaSource struct {
+	Id                 string `json:"Id"`
+	Protocol           string `json:"Protocol"`
+	SupportsDirectPlay bool   `json:"SupportsDirectPlay"`
+}
+
 var (
 	configDir  string
 	serverURL  string
@@ -381,6 +400,75 @@ func makeAuthHeader(config *Configuration, token string) string {
 	)
 }
 
+func getItemInfo(serverURL, itemID, userID string, config *Configuration, token string) (*ItemInfo, error) {
+	endpoint := fmt.Sprintf("%s/Users/%s/Items/%s", serverURL, userID, itemID)
+
+	req, err := http.NewRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", makeAuthHeader(config, token))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get item info with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var itemInfo ItemInfo
+	if err := json.Unmarshal(body, &itemInfo); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &itemInfo, nil
+}
+
+func handlePlayCommand(playData PlayCommandData, creds *Credentials, config *Configuration) error {
+	if len(playData.ItemIds) == 0 {
+		return fmt.Errorf("no items to play")
+	}
+
+	// For now, just play the first item
+	itemID := playData.ItemIds[0]
+
+	log.Printf("Fetching info for item: %s", itemID)
+	itemInfo, err := getItemInfo(creds.ServerURL, itemID, creds.UserID, config, creds.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to get item info: %w", err)
+	}
+
+	log.Printf("Playing: %s (Type: %s)", itemInfo.Name, itemInfo.Type)
+
+	// Get the direct stream URL
+	streamURL := getDirectStreamURL(creds.ServerURL, itemID, config, creds.AccessToken)
+	log.Printf("Stream URL: %s", streamURL)
+
+	// Play the video using VLC
+	if err := playVideoURL(streamURL); err != nil {
+		return fmt.Errorf("failed to play video: %w", err)
+	}
+
+	return nil
+}
+
+func getDirectStreamURL(serverURL, itemID string, config *Configuration, token string) string {
+	// Construct direct stream URL
+	// Format: /Videos/{itemId}/stream?static=true&DeviceId={deviceId}&api_key={token}
+	return fmt.Sprintf("%s/Videos/%s/stream?static=true&DeviceId=%s&api_key=%s",
+		serverURL, itemID, config.DeviceID, token)
+}
+
 func registerCapabilities(serverURL string, config *Configuration, token string) error {
 	caps := Capabilities{
 		PlayableMediaTypes:   "Video",
@@ -427,9 +515,9 @@ func registerCapabilities(serverURL string, config *Configuration, token string)
 	return nil
 }
 
-func connectWebSocket(serverURL string, config *Configuration, token string) error {
+func connectWebSocket(creds *Credentials, config *Configuration) error {
 	// Convert HTTP(S) URL to WS(S)
-	u, err := url.Parse(serverURL)
+	u, err := url.Parse(creds.ServerURL)
 	if err != nil {
 		return fmt.Errorf("failed to parse server URL: %w", err)
 	}
@@ -439,7 +527,7 @@ func connectWebSocket(serverURL string, config *Configuration, token string) err
 		wsScheme = "wss"
 	}
 
-	wsURL := fmt.Sprintf("%s://%s/socket?api_key=%s&device_id=%s", wsScheme, u.Host, token, config.DeviceID)
+	wsURL := fmt.Sprintf("%s://%s/socket?api_key=%s&device_id=%s", wsScheme, u.Host, creds.AccessToken, config.DeviceID)
 
 	log.Printf("Connecting to WebSocket: %s", wsURL)
 
@@ -479,8 +567,9 @@ func connectWebSocket(serverURL string, config *Configuration, token string) err
 
 			log.Printf("Received message:\n%s\n", string(jsonData))
 
-			// Handle keep-alive
-			if msg.MessageType == "ForceKeepAlive" {
+			// Handle different message types
+			switch msg.MessageType {
+			case "ForceKeepAlive":
 				log.Println("Sending KeepAlive response...")
 				keepAlive := map[string]string{
 					"MessageType": "KeepAlive",
@@ -515,6 +604,29 @@ func connectWebSocket(serverURL string, config *Configuration, token string) err
 						}()
 					}
 				}
+
+			case "Play":
+				log.Println("Received Play command")
+
+				// Parse the play command data
+				dataJSON, err := json.Marshal(msg.Data)
+				if err != nil {
+					log.Printf("Error marshaling play data: %v", err)
+					continue
+				}
+
+				var playData PlayCommandData
+				if err := json.Unmarshal(dataJSON, &playData); err != nil {
+					log.Printf("Error parsing play command: %v", err)
+					continue
+				}
+
+				// Handle the play command in a separate goroutine to not block message processing
+				go func() {
+					if err := handlePlayCommand(playData, creds, config); err != nil {
+						log.Printf("Error handling play command: %v", err)
+					}
+				}()
 			}
 		}
 	}()
@@ -563,7 +675,7 @@ func runClient() error {
 	log.Println("Capabilities registered successfully!")
 
 	// Connect to WebSocket
-	if err := connectWebSocket(creds.ServerURL, config, creds.AccessToken); err != nil {
+	if err := connectWebSocket(creds, config); err != nil {
 		return fmt.Errorf("WebSocket error: %w", err)
 	}
 
@@ -640,6 +752,80 @@ func playVideo(path string) error {
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 
 	log.Println("Playing... Press Ctrl+C to stop")
+
+	// Wait for playback to finish or interrupt
+	select {
+	case <-done:
+		log.Println("Video playback completed")
+	case <-interrupt:
+		log.Println("Stopping playback...")
+		player.Stop()
+	}
+
+	return nil
+}
+
+func playVideoURL(mediaURL string) error {
+	// Initialize libVLC with fullscreen flag
+	if err := vlc.Init("--fullscreen"); err != nil {
+		return fmt.Errorf("failed to initialize libVLC: %w", err)
+	}
+	defer vlc.Release()
+
+	// Create a new player
+	player, err := vlc.NewPlayer()
+	if err != nil {
+		return fmt.Errorf("failed to create player: %w", err)
+	}
+	defer func() {
+		player.Stop()
+		player.Release()
+	}()
+
+	log.Printf("Loading media from URL: %s", mediaURL)
+
+	// Load media from URL
+	media, err := player.LoadMediaFromURL(mediaURL)
+	if err != nil {
+		return fmt.Errorf("failed to load media: %w", err)
+	}
+	defer media.Release()
+
+	// Get event manager
+	manager, err := player.EventManager()
+	if err != nil {
+		return fmt.Errorf("failed to get event manager: %w", err)
+	}
+
+	// Channel to signal when playback ends
+	done := make(chan struct{})
+
+	// Register end reached event
+	eventCallback := func(event vlc.Event, userData interface{}) {
+		log.Println("Playback finished")
+		close(done)
+	}
+
+	eventID, err := manager.Attach(vlc.MediaPlayerEndReached, eventCallback, nil)
+	if err != nil {
+		return fmt.Errorf("failed to attach event: %w", err)
+	}
+	defer manager.Detach(eventID)
+
+	// Start playing
+	log.Println("Starting playback...")
+	if err := player.Play(); err != nil {
+		return fmt.Errorf("failed to start playback: %w", err)
+	}
+
+	// Set fullscreen mode
+	player.SetFullScreen(true)
+
+	// Handle Ctrl+C to stop playback gracefully
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+
+	log.Println("Playing in fullscreen... Press Ctrl+C to stop")
 
 	// Wait for playback to finish or interrupt
 	select {
