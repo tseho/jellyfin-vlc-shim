@@ -18,6 +18,18 @@ jellyfin-vlc-shim: player/player.go
 jellyfin-vlc-shim:
 	go build -o jellyfin-vlc-shim
 
+jellyfin-vlc-shim-linux-amd64: export GOOS = linux
+jellyfin-vlc-shim-linux-amd64: export GOARCH = amd64
+jellyfin-vlc-shim-linux-amd64: export CGO_ENABLED = 1
+jellyfin-vlc-shim-linux-amd64:
+	go build -o jellyfin-vlc-shim-linux-amd64
+
+jellyfin-vlc-shim-linux-arm64: export GOOS = linux
+jellyfin-vlc-shim-linux-arm64: export GOARCH = arm64
+jellyfin-vlc-shim-linux-arm64: export CGO_ENABLED = 1
+jellyfin-vlc-shim-linux-arm64:
+	go build -o jellyfin-vlc-shim-linux-arm64
+
 .PHONY: tests
 tests: build
 tests: export CI ?= 1
