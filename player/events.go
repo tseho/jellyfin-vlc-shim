@@ -45,6 +45,7 @@ func (p *Player) WaitForEndOrInterrupt(done <-chan struct{}) {
 	// Handle Ctrl+C to stop playback gracefully
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(interrupt)
 
 	log.Println("Playing... Press Ctrl+C to stop")
 

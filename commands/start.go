@@ -266,13 +266,13 @@ func playJellyfinVideo(mediaURL, itemID string, client *jellyfin.Client, cfg *co
 	p.WaitForEndOrInterrupt(done)
 
 	// Get final position from state and report playback stopped
-	// state := p.GetState()
-	// finalPositionMs := state.GetCurrentPositionMs()
-	// finalPositionTicks := int64(finalPositionMs) * 10000
+	state := p.GetState()
+	finalPositionMs := state.GetCurrentPositionMs()
+	finalPositionTicks := int64(finalPositionMs) * 10000
 
-	// if err := client.ReportPlaybackStopped(itemID, finalPositionTicks); err != nil {
-	// 	log.Printf("Warning: failed to report playback stopped: %v", err)
-	// }
+	if err := client.ReportPlaybackStopped(itemID, finalPositionTicks); err != nil {
+		log.Printf("Warning: failed to report playback stopped: %v", err)
+	}
 
 	return nil
 }
