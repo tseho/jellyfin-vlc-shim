@@ -192,16 +192,14 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 	case "PreviousTrack":
 		log.Println("PreviousTrack not yet implemented")
 	case "Seek":
-		log.Println("Seek not yet implemented")
-		// if playstateData.SeekPositionTicks > 0 {
-		// 	// Convert ticks to milliseconds (1 tick = 100 nanoseconds)
-		// 	seekTimeMs := playstateData.SeekPositionTicks / 10000
-		// 	if err := p.Seek(seekTimeMs); err != nil {
-		// 		return fmt.Errorf("failed to seek: %w", err)
-		// 	}
-		// } else {
-		// 	shouldReport = false
-		// }
+		if playstateData.SeekPositionTicks > 0 {
+			// Convert ticks to milliseconds (1 tick = 100 nanoseconds)
+			seekTimeMs := playstateData.SeekPositionTicks / 10000
+			if err := p.Seek(seekTimeMs); err != nil {
+				return fmt.Errorf("failed to seek: %w", err)
+			}
+			UpdatePlaybackStatus(client, p)
+		}
 	default:
 		log.Printf("Unknown playstate command: %s", command)
 	}
