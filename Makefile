@@ -24,11 +24,12 @@ jellyfin-vlc-shim-linux-amd64: export CGO_ENABLED = 1
 jellyfin-vlc-shim-linux-amd64:
 	go build -o jellyfin-vlc-shim-linux-amd64
 
-jellyfin-vlc-shim-linux-arm64: export GOOS = linux
-jellyfin-vlc-shim-linux-arm64: export GOARCH = arm64
-jellyfin-vlc-shim-linux-arm64: export CGO_ENABLED = 1
 jellyfin-vlc-shim-linux-arm64:
-	go build -o jellyfin-vlc-shim-linux-arm64
+	docker buildx build --load --progress=plain --platform linux/arm64 --build-arg ARCH=arm64 -t jellyfin-vlc-shim:linux-arm64 -f Dockerfile .
+	docker rm jellyfin-vlc-shim-linux-arm64-container || true
+	docker create --name jellyfin-vlc-shim-linux-arm64-container jellyfin-vlc-shim:linux-arm64
+	docker cp jellyfin-vlc-shim-linux-arm64-container:/jellyfin-vlc-shim/jellyfin-vlc-shim ./jellyfin-vlc-shim-linux-arm64
+	docker rm jellyfin-vlc-shim-linux-arm64-container
 
 .PHONY: tests
 tests: build
