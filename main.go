@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	vlc "github.com/adrg/libvlc-go/v3"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
@@ -94,6 +95,16 @@ var runCmd = &cobra.Command{
 	},
 }
 
+var playCmd = &cobra.Command{
+	Use:   "play [path]",
+	Short: "Play a local video file using VLC",
+	Long:  "Play a local video file using libVLC. The file path must be an absolute or relative path to a video file.",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return playVideo(args[0])
+	},
+}
+
 func init() {
 	rootCmd.PersistentFlags().StringVar(&configDir, "config", "", "Configuration directory (default: ~/.config/jellyfin-vlc-shim)")
 
@@ -104,6 +115,7 @@ func init() {
 
 	rootCmd.AddCommand(authCmd)
 	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(playCmd)
 }
 
 func getConfigDir() (string, error) {
@@ -553,6 +565,89 @@ func runClient() error {
 	// Connect to WebSocket
 	if err := connectWebSocket(creds.ServerURL, config, creds.AccessToken); err != nil {
 		return fmt.Errorf("WebSocket error: %w", err)
+	}
+
+	return nil
+}
+
+func playVideo(path string) error {
+	// Initialize libVLC with minimal flags to avoid video output issues
+	// "-vv" to enable verbose logging
+	if err := vlc.Init("--no-xlib"); err != nil {
+		return fmt.Errorf("failed to initialize libVLC: %w", err)
+	}
+	defer vlc.Release()
+
+	// Create a new player
+	player, err := vlc.NewPlayer()
+	if err != nil {
+		return fmt.Errorf("failed to create player: %w", err)
+	}
+	defer func() {
+		player.Stop()
+		player.Release()
+	}()
+
+	// Convert to absolute path if relative
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("failed to resolve path: %w", err)
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		return fmt.Errorf("file does not exist: %s", absPath)
+	}
+
+	log.Printf("Loading media: %s", absPath)
+
+	// Load media from path
+	media, err := player.LoadMediaFromPath(absPath)
+	if err != nil {
+		return fmt.Errorf("failed to load media: %w", err)
+	}
+	defer media.Release()
+
+	// Get event manager
+	manager, err := player.EventManager()
+	if err != nil {
+		return fmt.Errorf("failed to get event manager: %w", err)
+	}
+
+	// Channel to signal when playback ends
+	done := make(chan struct{})
+
+	// Register end reached event
+	eventCallback := func(event vlc.Event, userData interface{}) {
+		log.Println("Playback finished")
+		close(done)
+	}
+
+	eventID, err := manager.Attach(vlc.MediaPlayerEndReached, eventCallback, nil)
+	if err != nil {
+		return fmt.Errorf("failed to attach event: %w", err)
+	}
+	defer manager.Detach(eventID)
+
+	// Start playing
+	log.Println("Starting playback...")
+	if err := player.Play(); err != nil {
+		return fmt.Errorf("failed to start playback: %w", err)
+	}
+
+	// Handle Ctrl+C to stop playback gracefully
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+
+	log.Println("Playing... Press Ctrl+C to stop")
+
+	// Wait for playback to finish or interrupt
+	select {
+	case <-done:
+		log.Println("Video playback completed")
+	case <-interrupt:
+		log.Println("Stopping playback...")
+		player.Stop()
 	}
 
 	return nil

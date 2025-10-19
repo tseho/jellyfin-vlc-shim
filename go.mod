@@ -3,6 +3,7 @@ module jellyfin-vlc-shim
 go 1.25
 
 require (
+	github.com/adrg/libvlc-go/v3 v3.1.6 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
