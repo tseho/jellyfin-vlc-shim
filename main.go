@@ -223,7 +223,7 @@ func runClient() error {
 
 			// Handle the play command in a separate goroutine to not block message processing
 			go func() {
-				if err := handlePlayCommand(playData, client); err != nil {
+				if err := handlePlayCommand(playData, client, cfg); err != nil {
 					log.Printf("Error handling play command: %v", err)
 				}
 			}()
@@ -252,7 +252,7 @@ func runClient() error {
 	})
 }
 
-func handlePlayCommand(playData jellyfin.PlayCommandData, client *jellyfin.Client) error {
+func handlePlayCommand(playData jellyfin.PlayCommandData, client *jellyfin.Client, cfg *config.Config) error {
 	if len(playData.ItemIds) == 0 {
 		return fmt.Errorf("no items to play")
 	}
@@ -273,7 +273,7 @@ func handlePlayCommand(playData jellyfin.PlayCommandData, client *jellyfin.Clien
 	log.Printf("Stream URL: %s", streamURL)
 
 	// Play the video using VLC with progress reporting
-	if err := playJellyfinVideo(streamURL, itemID, client); err != nil {
+	if err := playJellyfinVideo(streamURL, itemID, client, cfg); err != nil {
 		return fmt.Errorf("failed to play video: %w", err)
 	}
 
@@ -379,9 +379,12 @@ func playVideo(path string) error {
 	return nil
 }
 
-func playJellyfinVideo(mediaURL, itemID string, client *jellyfin.Client) error {
-	// Create player with fullscreen
-	p, err := player.New(player.DefaultOptions())
+func playJellyfinVideo(mediaURL, itemID string, client *jellyfin.Client, cfg *config.Config) error {
+	// Create player with config fullscreen setting
+	p, err := player.New(&player.Options{
+		VLCArgs:    []string{"--fullscreen"},
+		Fullscreen: cfg.Fullscreen,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create player: %w", err)
 	}

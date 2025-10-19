@@ -14,6 +14,7 @@ type Config struct {
 	DeviceID       string `json:"device_id"`
 	JellyfinClient string `json:"jellyfin_client"`
 	JellyfinDevice string `json:"jellyfin_device"`
+	Fullscreen     bool   `json:"fullscreen"`
 }
 
 // Credentials holds the authentication information
@@ -40,6 +41,7 @@ func Load(configDir string) (*Config, error) {
 				DeviceID:       uuid.New().String(),
 				JellyfinClient: "jellyfin-vlc-shim",
 				JellyfinDevice: hostname,
+				Fullscreen:     true,
 			}
 			if saveErr := Save(configDir, cfg); saveErr != nil {
 				return nil, fmt.Errorf("failed to initialize configuration: %w", saveErr)

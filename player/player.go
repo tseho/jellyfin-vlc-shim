@@ -34,20 +34,23 @@ func (s *State) GetCurrentPositionMs() int {
 
 // Player wraps a VLC player instance with state management
 type Player struct {
-	player *vlc.Player
-	state  *State
-	lock   sync.Mutex
+	player     *vlc.Player
+	state      *State
+	lock       sync.Mutex
+	fullscreen bool
 }
 
 // Options configures player initialization
 type Options struct {
-	VLCArgs []string
+	VLCArgs    []string
+	Fullscreen bool
 }
 
 // DefaultOptions returns default player options with fullscreen enabled
 func DefaultOptions() *Options {
 	return &Options{
-		VLCArgs: []string{"--fullscreen"},
+		VLCArgs:    []string{"--fullscreen"},
+		Fullscreen: true,
 	}
 }
 
@@ -69,6 +72,9 @@ func New(opts *Options) (*Player, error) {
 		return nil, fmt.Errorf("failed to create player: %w", err)
 	}
 
+	// Set fullscreen mode
+	vlcPlayer.SetFullScreen(opts.Fullscreen)
+
 	return &Player{
 		player: vlcPlayer,
 		state: &State{
@@ -77,6 +83,7 @@ func New(opts *Options) (*Player, error) {
 			TotalPausedDur: 0,
 			SeekOffset:     0,
 		},
+		fullscreen: opts.Fullscreen,
 	}, nil
 }
 
