@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -69,6 +70,12 @@ type PlayCommandData struct {
 	PlayCommand       string   `json:"PlayCommand"`
 }
 
+type PlaystateCommandData struct {
+	Command            string `json:"Command"`
+	SeekPositionTicks  int64  `json:"SeekPositionTicks,omitempty"`
+	ControllingUserId  string `json:"ControllingUserId,omitempty"`
+}
+
 type ItemInfo struct {
 	Id           string        `json:"Id"`
 	Name         string        `json:"Name"`
@@ -82,12 +89,37 @@ type MediaSource struct {
 	SupportsDirectPlay bool   `json:"SupportsDirectPlay"`
 }
 
+type PlayerState struct {
+	IsPaused       bool
+	StartTime      time.Time
+	PausedAt       time.Time
+	TotalPausedDur time.Duration
+	SeekOffset     int64 // in milliseconds
+}
+
+func (ps *PlayerState) GetCurrentPositionMs() int {
+	if ps.IsPaused {
+		// Return position at pause time
+		elapsed := ps.PausedAt.Sub(ps.StartTime) - ps.TotalPausedDur
+		return int(elapsed.Milliseconds()) + int(ps.SeekOffset)
+	}
+	// Return current position
+	elapsed := time.Since(ps.StartTime) - ps.TotalPausedDur
+	return int(elapsed.Milliseconds()) + int(ps.SeekOffset)
+}
+
 var (
-	configDir  string
-	serverURL  string
-	username   string
-	password   string
-	deviceName string
+	configDir     string
+	serverURL     string
+	username      string
+	password      string
+	deviceName    string
+	activePlayer  *vlc.Player
+	activeItemID  string
+	activeCreds   *Credentials
+	activeConfig  *Configuration
+	playerState   *PlayerState
+	playerLock    = &sync.Mutex{}
 )
 
 var rootCmd = &cobra.Command{
@@ -462,6 +494,114 @@ func handlePlayCommand(playData PlayCommandData, creds *Credentials, config *Con
 	return nil
 }
 
+func handlePlaystateCommand(playstateData PlaystateCommandData) error {
+	playerLock.Lock()
+	player := activePlayer
+	itemID := activeItemID
+	creds := activeCreds
+	config := activeConfig
+	state := playerState
+	playerLock.Unlock()
+
+	if player == nil || state == nil {
+		return fmt.Errorf("no active player")
+	}
+
+	command := playstateData.Command
+	log.Printf("Received Playstate command: %s", command)
+
+	var shouldReport bool = true
+
+	playerLock.Lock()
+	defer playerLock.Unlock()
+
+	switch command {
+	case "Pause":
+		if !state.IsPaused {
+			if err := player.SetPause(true); err != nil {
+				return fmt.Errorf("failed to pause: %w", err)
+			}
+			state.IsPaused = true
+			state.PausedAt = time.Now()
+			log.Println("Player paused")
+		}
+	case "Unpause":
+		if state.IsPaused {
+			if err := player.SetPause(false); err != nil {
+				return fmt.Errorf("failed to unpause: %w", err)
+			}
+			// Add the paused duration to total
+			state.TotalPausedDur += time.Since(state.PausedAt)
+			state.IsPaused = false
+			log.Println("Player unpaused")
+		}
+	case "PlayPause":
+		// Toggle pause state
+		if state.IsPaused {
+			if err := player.SetPause(false); err != nil {
+				return fmt.Errorf("failed to unpause: %w", err)
+			}
+			// Add the paused duration to total
+			state.TotalPausedDur += time.Since(state.PausedAt)
+			state.IsPaused = false
+			log.Println("Player unpaused (toggle)")
+		} else {
+			if err := player.SetPause(true); err != nil {
+				return fmt.Errorf("failed to pause: %w", err)
+			}
+			state.IsPaused = true
+			state.PausedAt = time.Now()
+			log.Println("Player paused (toggle)")
+		}
+	case "Stop":
+		player.Stop()
+		log.Println("Player stopped")
+		shouldReport = false // Stop will be reported elsewhere
+	case "NextTrack":
+		log.Println("NextTrack not yet implemented")
+		shouldReport = false
+	case "PreviousTrack":
+		log.Println("PreviousTrack not yet implemented")
+		shouldReport = false
+	case "Seek":
+		if playstateData.SeekPositionTicks > 0 {
+			// Convert ticks to milliseconds (1 tick = 100 nanoseconds)
+			seekTimeMs := playstateData.SeekPositionTicks / 10000
+			if err := player.SetMediaTime(int(seekTimeMs)); err != nil {
+				return fmt.Errorf("failed to seek: %w", err)
+			}
+
+			// Update our local state tracking
+			state.SeekOffset = seekTimeMs
+			state.StartTime = time.Now()
+			state.TotalPausedDur = 0
+			if state.IsPaused {
+				state.PausedAt = time.Now()
+			}
+			log.Printf("Seeked to position: %d ms", seekTimeMs)
+		} else {
+			shouldReport = false
+		}
+	default:
+		log.Printf("Unknown playstate command: %s", command)
+		shouldReport = false
+	}
+
+	// Report the playback progress to Jellyfin
+	if shouldReport && creds != nil && config != nil && itemID != "" {
+		positionMs := state.GetCurrentPositionMs()
+		positionTicks := int64(positionMs) * 10000
+
+		if err := reportPlaybackProgress(creds.ServerURL, itemID, positionTicks, state.IsPaused, creds, config); err != nil {
+			log.Printf("Warning: failed to report playback progress: %v", err)
+		} else {
+			log.Printf("Reported playback progress (paused: %v, position: %d ms)", state.IsPaused, positionMs)
+		}
+	}
+
+	return nil
+}
+
 func getDirectStreamURL(serverURL, itemID string, config *Configuration, token string) string {
 	// Construct direct stream URL
 	// Format: /Videos/{itemId}/stream?static=true&DeviceId={deviceId}&api_key={token}
@@ -742,6 +882,27 @@ func connectWebSocket(creds *Credentials, config *Configuration) error {
 						log.Printf("Error handling play command: %v", err)
 					}
 				}()
+
+			case "Playstate":
+				log.Println("Received Playstate command")
+
+				// Parse the playstate command data
+				dataJSON, err := json.Marshal(msg.Data)
+				if err != nil {
+					log.Printf("Error marshaling playstate data: %v", err)
+					continue
+				}
+
+				var playstateData PlaystateCommandData
+				if err := json.Unmarshal(dataJSON, &playstateData); err != nil {
+					log.Printf("Error parsing playstate command: %v", err)
+					continue
+				}
+
+				// Handle the playstate command
+				if err := handlePlaystateCommand(playstateData); err != nil {
+					log.Printf("Error handling playstate command: %v", err)
+				}
 			}
 		}
 	}()
@@ -917,9 +1078,30 @@ func playVideoURLWithProgress(mediaURL, itemID string, creds *Credentials, confi
 		return fmt.Errorf("failed to create player: %w", err)
 	}
 	defer func() {
+		playerLock.Lock()
+		activePlayer = nil
+		activeItemID = ""
+		activeCreds = nil
+		activeConfig = nil
+		playerState = nil
+		playerLock.Unlock()
 		player.Stop()
 		player.Release()
 	}()
+
+	// Set the global active player and playback context
+	playerLock.Lock()
+	activePlayer = player
+	activeItemID = itemID
+	activeCreds = creds
+	activeConfig = config
+	playerState = &PlayerState{
+		IsPaused:       false,
+		StartTime:      time.Now(),
+		TotalPausedDur: 0,
+		SeekOffset:     0,
+	}
+	playerLock.Unlock()
 
 	log.Printf("Loading media from URL: %s", mediaURL)
 
