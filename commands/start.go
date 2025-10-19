@@ -154,8 +154,8 @@ func handlePlayCommand(playData jellyfin.PlayCommandData, client *jellyfin.Clien
 		log.Printf("Subtitle info: %s", string(subtitleJSON))
 	}
 
-	// Play with external subtitles
-	if subtitle != nil && subtitle.External {
+	// Burn external subtitles if enabled (slow and CPU intensive)
+	if cfg.BurnExternalSubtitles && subtitle != nil && subtitle.External {
 		return playJellyfinVideoWithExternalSubtitle(videoStreamURL, subtitle, itemID, client, cfg)
 	}
 
@@ -226,21 +226,29 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 }
 
 func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID string, client *jellyfin.Client, cfg *config.Config) error {
-	// Create player with config fullscreen setting
+	vlcArgs := []string{}
+	if cfg.VLCVerbose {
+		vlcArgs = append(vlcArgs, "--verbose=2")
+	}
+
 	p, err := player.New(&player.Options{
-		// VLCArgs:    []string{"--verbose=2"},
-		VLCArgs:    []string{},
+		VLCArgs:    vlcArgs,
 		Fullscreen: cfg.Fullscreen,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create player: %w", err)
 	}
+
+	subtitleTempPath := fmt.Sprintf("/tmp/%s.srt", itemID)
+
 	defer func() {
 		playerLock.Lock()
 		activePlayer = nil
 		activeItemID = ""
 		playerLock.Unlock()
 		p.Release()
+
+		os.Remove(subtitleTempPath)
 	}()
 
 	// Set the global active player and playback context
@@ -256,6 +264,20 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 	}
 	defer media.Release()
 
+	if subtitle != nil && subtitle.External {
+		err := downloadSubtitle(*subtitle.URL, subtitleTempPath)
+		if err != nil {
+			return err
+		}
+
+		// Add the subtitle file option to VLC
+		if err := media.AddOptions(fmt.Sprintf(":sub-file=%s", subtitleTempPath)); err != nil {
+			log.Printf("Warning: failed to add subtitle option: %v", err)
+		} else {
+			log.Printf("Added subtitle file option: %s", subtitleTempPath)
+		}
+	}
+
 	// Setup end reached event
 	done, err := p.ListenEndReachedEvent()
 	if err != nil {
@@ -268,9 +290,9 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 	}
 
 	// Wait a bit for the player to actually start playing
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
-	if subtitle != nil {
+	if subtitle != nil && !subtitle.External {
 		p.EnableSubtitle(subtitle.Index)
 	}
 
@@ -311,7 +333,7 @@ func playJellyfinVideoWithExternalSubtitle(mediaURL string, subtitle *jellyfin.S
 		}
 	}()
 
-	streamURL, err := startStreamWithBurnedSubtitles(mediaURL, subtitleTempPath)
+	streamURL, err := startStreamWithBurnedSubtitles(mediaURL, subtitleTempPath, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to start stream with burned subtitles: %w", err)
 	}
@@ -344,7 +366,7 @@ func downloadSubtitle(url, path string) error {
 	return nil
 }
 
-func startStreamWithBurnedSubtitles(inputURL, subtitleFile string) (string, error) {
+func startStreamWithBurnedSubtitles(inputURL, subtitleFile string, cfg *config.Config) (string, error) {
 	outputURL := "http://0.0.0.0:8090/stream"
 
 	go func() {
@@ -352,8 +374,8 @@ func startStreamWithBurnedSubtitles(inputURL, subtitleFile string) (string, erro
 		err := ffmpeg.Input(inputURL, ffmpeg.KwArgs{"re": ""}).
 			Filter("subtitles", ffmpeg.Args{subtitleFile}).
 			Output(outputURL, ffmpeg.KwArgs{
-				"c:v":    "libx264",
-				"preset": "veryfast",
+				"c:v":    cfg.BurnEncoder,
+				"preset": cfg.BurnSpeed,
 				"crf":    "20",
 				"tune":   "zerolatency",
 				"g":      "48",
@@ -370,7 +392,7 @@ func startStreamWithBurnedSubtitles(inputURL, subtitleFile string) (string, erro
 	}()
 
 	// Give ffmpeg a moment to start listening
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	return outputURL, nil
 }

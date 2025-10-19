@@ -11,10 +11,14 @@ import (
 
 // Config holds the Jellyfin client configuration
 type Config struct {
-	DeviceID       string `json:"device_id"`
-	JellyfinClient string `json:"jellyfin_client"`
-	JellyfinDevice string `json:"jellyfin_device"`
-	Fullscreen     bool   `json:"fullscreen"`
+	DeviceID              string `json:"device_id"`
+	JellyfinClient        string `json:"jellyfin_client"`
+	JellyfinDevice        string `json:"jellyfin_device"`
+	Fullscreen            bool   `json:"fullscreen"`
+	BurnExternalSubtitles bool   `json:"burn_external_subtitles"`
+	BurnEncoder           string `json:"burn_encoder"`
+	BurnSpeed             string `json:"burn_speed"`
+	VLCVerbose            bool   `json:"vlc_verbose"`
 }
 
 // Credentials holds the authentication information
@@ -28,21 +32,27 @@ type Credentials struct {
 // Load loads the configuration from the config directory
 func Load(configDir string) (*Config, error) {
 	configPath := filepath.Join(configDir, "configuration.json")
+
+	// Initialize with defaults first
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "Unknown"
+	}
+
+	cfg := &Config{
+		DeviceID:              uuid.New().String(),
+		JellyfinClient:        "jellyfin-vlc-shim",
+		JellyfinDevice:        hostname,
+		Fullscreen:            true,
+		BurnExternalSubtitles: false,
+		BurnEncoder:           "libx264",
+		BurnSpeed:             "ultrafast",
+		VLCVerbose:            false,
+	}
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Initialize with default values if file doesn't exist
-			hostname, err := os.Hostname()
-			if err != nil {
-				hostname = "Unknown" // Fallback if hostname cannot be determined
-			}
-
-			cfg := &Config{
-				DeviceID:       uuid.New().String(),
-				JellyfinClient: "jellyfin-vlc-shim",
-				JellyfinDevice: hostname,
-				Fullscreen:     true,
-			}
 			if saveErr := Save(configDir, cfg); saveErr != nil {
 				return nil, fmt.Errorf("failed to initialize configuration: %w", saveErr)
 			}
@@ -51,12 +61,12 @@ func Load(configDir string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read configuration file: %w", err)
 	}
 
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	// Unmarshal will only override fields present in JSON
+	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse configuration: %w", err)
 	}
 
-	return &cfg, nil
+	return cfg, nil
 }
 
 // Save saves the configuration to the config directory
