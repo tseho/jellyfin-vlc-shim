@@ -1,7 +1,8 @@
 .DEFAULT_GOAL := build
 
 .PHONY: build
-build:
+build: jellyfin-vlc-shim
+
 jellyfin-vlc-shim: main.go go.mod go.sum
 	go build -o jellyfin-vlc-shim
 
