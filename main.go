@@ -2,124 +2,33 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
-	"net/url"
 	"os"
-	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	vlc "github.com/adrg/libvlc-go/v3"
-	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
+	"jellyfin-vlc-shim/config"
+	"jellyfin-vlc-shim/jellyfin"
+	"jellyfin-vlc-shim/player"
+
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
 
-type AuthRequest struct {
-	Username string `json:"Username"`
-	Pw       string `json:"Pw"`
-}
-
-type AuthenticationResult struct {
-	User        User   `json:"User"`
-	AccessToken string `json:"AccessToken"`
-	ServerId    string `json:"ServerId"`
-}
-
-type User struct {
-	Name string `json:"Name"`
-	Id   string `json:"Id"`
-}
-
-type Credentials struct {
-	ServerURL   string `json:"server_url"`
-	AccessToken string `json:"access_token"`
-	UserID      string `json:"user_id"`
-	Username    string `json:"username"`
-}
-
-type Configuration struct {
-	DeviceID       string `json:"device_id"`
-	JellyfinClient string `json:"jellyfin_client"`
-	JellyfinDevice string `json:"jellyfin_device"`
-}
-
-type Capabilities struct {
-	PlayableMediaTypes   string `json:"PlayableMediaTypes"`
-	SupportsMediaControl bool   `json:"SupportsMediaControl"`
-	SupportedCommands    string `json:"SupportedCommands"`
-}
-
-type WebSocketMessage struct {
-	MessageType string      `json:"MessageType"`
-	Data        interface{} `json:"Data,omitempty"`
-}
-
-type PlayCommandData struct {
-	ControllingUserId string   `json:"ControllingUserId"`
-	ItemIds           []string `json:"ItemIds"`
-	PlayCommand       string   `json:"PlayCommand"`
-}
-
-type PlaystateCommandData struct {
-	Command            string `json:"Command"`
-	SeekPositionTicks  int64  `json:"SeekPositionTicks,omitempty"`
-	ControllingUserId  string `json:"ControllingUserId,omitempty"`
-}
-
-type ItemInfo struct {
-	Id           string        `json:"Id"`
-	Name         string        `json:"Name"`
-	Type         string        `json:"Type"`
-	MediaSources []MediaSource `json:"MediaSources"`
-}
-
-type MediaSource struct {
-	Id                 string `json:"Id"`
-	Protocol           string `json:"Protocol"`
-	SupportsDirectPlay bool   `json:"SupportsDirectPlay"`
-}
-
-type PlayerState struct {
-	IsPaused       bool
-	StartTime      time.Time
-	PausedAt       time.Time
-	TotalPausedDur time.Duration
-	SeekOffset     int64 // in milliseconds
-}
-
-func (ps *PlayerState) GetCurrentPositionMs() int {
-	if ps.IsPaused {
-		// Return position at pause time
-		elapsed := ps.PausedAt.Sub(ps.StartTime) - ps.TotalPausedDur
-		return int(elapsed.Milliseconds()) + int(ps.SeekOffset)
-	}
-	// Return current position
-	elapsed := time.Since(ps.StartTime) - ps.TotalPausedDur
-	return int(elapsed.Milliseconds()) + int(ps.SeekOffset)
-}
-
 var (
-	configDir     string
-	serverURL     string
-	username      string
-	password      string
-	deviceName    string
-	activePlayer  *vlc.Player
-	activeItemID  string
-	activeCreds   *Credentials
-	activeConfig  *Configuration
-	playerState   *PlayerState
-	playerLock    = &sync.Mutex{}
+	configDir  string
+	serverURL  string
+	username   string
+	password   string
+	deviceName string
+	// Global player state for handling commands
+	activePlayer *player.Player
+	activeItemID string
+	playerLock   = &sync.Mutex{}
 )
 
 var rootCmd = &cobra.Command{
@@ -167,19 +76,6 @@ func init() {
 	rootCmd.AddCommand(authCmd)
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(playCmd)
-}
-
-func getConfigDir() (string, error) {
-	if configDir != "" {
-		return configDir, nil
-	}
-
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get user home directory: %w", err)
-	}
-
-	return filepath.Join(homeDir, ".config", "jellyfin-vlc-shim"), nil
 }
 
 func main() {
@@ -231,35 +127,41 @@ func authenticate() error {
 		inputPassword = string(passwordBytes)
 	}
 
+	// Get config directory
+	dir, err := config.GetConfigDir(configDir)
+	if err != nil {
+		return fmt.Errorf("failed to get config directory: %w", err)
+	}
+
 	// Load or initialize configuration
-	config, err := loadConfiguration()
+	cfg, err := config.Load(dir)
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
 	// Update device name if provided
 	if deviceName != "" {
-		config.JellyfinDevice = deviceName
-		if err := saveConfiguration(config); err != nil {
+		cfg.JellyfinDevice = deviceName
+		if err := config.Save(dir, cfg); err != nil {
 			return fmt.Errorf("failed to save configuration with device name: %w", err)
 		}
 	}
 
 	// Authenticate with Jellyfin
-	authResult, err := authenticateWithJellyfin(inputURL, inputUsername, inputPassword, config)
+	authResult, err := jellyfin.Authenticate(inputURL, inputUsername, inputPassword, cfg.DeviceID, cfg.JellyfinClient, cfg.JellyfinDevice)
 	if err != nil {
 		return fmt.Errorf("authentication failed: %w", err)
 	}
 
 	// Save credentials
-	creds := Credentials{
+	creds := &config.Credentials{
 		ServerURL:   inputURL,
 		AccessToken: authResult.AccessToken,
 		UserID:      authResult.User.Id,
 		Username:    authResult.User.Name,
 	}
 
-	if err := saveCredentials(creds); err != nil {
+	if err := config.SaveCredentials(dir, creds); err != nil {
 		return fmt.Errorf("failed to save credentials: %w", err)
 	}
 
@@ -268,205 +170,89 @@ func authenticate() error {
 	return nil
 }
 
-func authenticateWithJellyfin(baseURL, username, password string, config *Configuration) (*AuthenticationResult, error) {
-	authReq := AuthRequest{
-		Username: username,
-		Pw:       password,
-	}
-
-	jsonData, err := json.Marshal(authReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	endpoint := fmt.Sprintf("%s/Users/AuthenticateByName", baseURL)
-	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Emby-Authorization", fmt.Sprintf(`MediaBrowser Client="%s", Device="%s", DeviceId="%s", Version="0.0.1"`, config.JellyfinClient, config.JellyfinDevice, config.DeviceID))
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("authentication failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var authResult AuthenticationResult
-	if err := json.Unmarshal(body, &authResult); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &authResult, nil
-}
-
-func saveCredentials(creds Credentials) error {
-	dir, err := getConfigDir()
+func runClient() error {
+	// Get config directory
+	dir, err := config.GetConfigDir(configDir)
 	if err != nil {
 		return fmt.Errorf("failed to get config directory: %w", err)
 	}
 
-	// Create config directory if it doesn't exist
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	// Marshal credentials to JSON
-	jsonData, err := json.MarshalIndent(creds, "", "  ")
+	// Load configuration
+	cfg, err := config.Load(dir)
 	if err != nil {
-		return fmt.Errorf("failed to marshal credentials: %w", err)
+		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
-	// Write to file
-	credPath := filepath.Join(dir, "credentials.json")
-	if err := os.WriteFile(credPath, jsonData, 0600); err != nil {
-		return fmt.Errorf("failed to write credentials file: %w", err)
-	}
-
-	return nil
-}
-
-func loadCredentials() (*Credentials, error) {
-	dir, err := getConfigDir()
+	// Load credentials
+	creds, err := config.LoadCredentials(dir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get config directory: %w", err)
+		return fmt.Errorf("failed to load credentials: %w\nPlease run 'jellyfin-vlc-shim auth' first", err)
 	}
 
-	credPath := filepath.Join(dir, "credentials.json")
-	data, err := os.ReadFile(credPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read credentials file: %w", err)
+	log.Printf("Starting Jellyfin VLC Shim client")
+	log.Printf("Server: %s", creds.ServerURL)
+	log.Printf("User: %s", creds.Username)
+	log.Printf("Device ID: %s", cfg.DeviceID)
+
+	// Create Jellyfin client
+	client := jellyfin.NewClient(creds.ServerURL, creds.AccessToken, creds.UserID, cfg.DeviceID, cfg.JellyfinClient, cfg.JellyfinDevice)
+
+	// Register capabilities
+	log.Println("Registering capabilities with Jellyfin server...")
+	if err := client.RegisterCapabilities(); err != nil {
+		return fmt.Errorf("failed to register capabilities: %w", err)
 	}
+	log.Println("Capabilities registered successfully!")
 
-	var creds Credentials
-	if err := json.Unmarshal(data, &creds); err != nil {
-		return nil, fmt.Errorf("failed to parse credentials: %w", err)
-	}
+	// Connect to WebSocket and handle messages
+	return client.ConnectWebSocket(func(msg jellyfin.WebSocketMessage) error {
+		switch msg.MessageType {
+		case "Play":
+			log.Println("Received Play command")
 
-	return &creds, nil
-}
-
-func loadConfiguration() (*Configuration, error) {
-	dir, err := getConfigDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get config directory: %w", err)
-	}
-
-	configPath := filepath.Join(dir, "configuration.json")
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Initialize with default values if file doesn't exist
-			hostname, err := os.Hostname()
+			// Parse the play command data
+			dataJSON, err := json.Marshal(msg.Data)
 			if err != nil {
-				hostname = "Unknown" // Fallback if hostname cannot be determined
+				return fmt.Errorf("error marshaling play data: %w", err)
 			}
 
-			config := &Configuration{
-				DeviceID:       generateDeviceID(),
-				JellyfinClient: "jellyfin-vlc-shim",
-				JellyfinDevice: hostname,
+			var playData jellyfin.PlayCommandData
+			if err := json.Unmarshal(dataJSON, &playData); err != nil {
+				return fmt.Errorf("error parsing play command: %w", err)
 			}
-			if saveErr := saveConfiguration(config); saveErr != nil {
-				return nil, fmt.Errorf("failed to initialize configuration: %w", saveErr)
+
+			// Handle the play command in a separate goroutine to not block message processing
+			go func() {
+				if err := handlePlayCommand(playData, client); err != nil {
+					log.Printf("Error handling play command: %v", err)
+				}
+			}()
+
+		case "Playstate":
+			log.Println("Received Playstate command")
+
+			// Parse the playstate command data
+			dataJSON, err := json.Marshal(msg.Data)
+			if err != nil {
+				return fmt.Errorf("error marshaling playstate data: %w", err)
 			}
-			return config, nil
+
+			var playstateData jellyfin.PlaystateCommandData
+			if err := json.Unmarshal(dataJSON, &playstateData); err != nil {
+				return fmt.Errorf("error parsing playstate command: %w", err)
+			}
+
+			// Handle the playstate command
+			if err := handlePlaystateCommand(playstateData, client); err != nil {
+				log.Printf("Error handling playstate command: %v", err)
+			}
 		}
-		return nil, fmt.Errorf("failed to read configuration file: %w", err)
-	}
 
-	var config Configuration
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse configuration: %w", err)
-	}
-
-	return &config, nil
+		return nil
+	})
 }
 
-func saveConfiguration(config *Configuration) error {
-	dir, err := getConfigDir()
-	if err != nil {
-		return fmt.Errorf("failed to get config directory: %w", err)
-	}
-
-	// Create config directory if it doesn't exist
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	// Marshal configuration to JSON
-	jsonData, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal configuration: %w", err)
-	}
-
-	// Write to file
-	configPath := filepath.Join(dir, "configuration.json")
-	if err := os.WriteFile(configPath, jsonData, 0600); err != nil {
-		return fmt.Errorf("failed to write configuration file: %w", err)
-	}
-
-	return nil
-}
-
-func generateDeviceID() string {
-	return uuid.New().String()
-}
-
-func makeAuthHeader(config *Configuration, token string) string {
-	return fmt.Sprintf(
-		`MediaBrowser Client="%s", Device="%s", DeviceId="%s", Version="0.0.1", Token="%s"`,
-		config.JellyfinClient, config.JellyfinDevice, config.DeviceID, token,
-	)
-}
-
-func getItemInfo(serverURL, itemID, userID string, config *Configuration, token string) (*ItemInfo, error) {
-	endpoint := fmt.Sprintf("%s/Users/%s/Items/%s", serverURL, userID, itemID)
-
-	req, err := http.NewRequest("GET", endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", makeAuthHeader(config, token))
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to get item info with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var itemInfo ItemInfo
-	if err := json.Unmarshal(body, &itemInfo); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &itemInfo, nil
-}
-
-func handlePlayCommand(playData PlayCommandData, creds *Credentials, config *Configuration) error {
+func handlePlayCommand(playData jellyfin.PlayCommandData, client *jellyfin.Client) error {
 	if len(playData.ItemIds) == 0 {
 		return fmt.Errorf("no items to play")
 	}
@@ -475,7 +261,7 @@ func handlePlayCommand(playData PlayCommandData, creds *Credentials, config *Con
 	itemID := playData.ItemIds[0]
 
 	log.Printf("Fetching info for item: %s", itemID)
-	itemInfo, err := getItemInfo(creds.ServerURL, itemID, creds.UserID, config, creds.AccessToken)
+	itemInfo, err := client.GetItemInfo(itemID)
 	if err != nil {
 		return fmt.Errorf("failed to get item info: %w", err)
 	}
@@ -483,597 +269,119 @@ func handlePlayCommand(playData PlayCommandData, creds *Credentials, config *Con
 	log.Printf("Playing: %s (Type: %s)", itemInfo.Name, itemInfo.Type)
 
 	// Get the direct stream URL
-	streamURL := getDirectStreamURL(creds.ServerURL, itemID, config, creds.AccessToken)
+	streamURL := client.GetDirectStreamURL(itemID)
 	log.Printf("Stream URL: %s", streamURL)
 
 	// Play the video using VLC with progress reporting
-	if err := playVideoURLWithProgress(streamURL, itemID, creds, config); err != nil {
+	if err := playJellyfinVideo(streamURL, itemID, client); err != nil {
 		return fmt.Errorf("failed to play video: %w", err)
 	}
 
 	return nil
 }
 
-func handlePlaystateCommand(playstateData PlaystateCommandData) error {
-	playerLock.Lock()
-	player := activePlayer
+func UpdatePlaybackStatus(client *jellyfin.Client, player *player.Player) {
 	itemID := activeItemID
-	creds := activeCreds
-	config := activeConfig
-	state := playerState
+	state := player.GetState()
+	positionMs := state.GetCurrentPositionMs()
+	positionTicks := int64(positionMs) * 10000
+
+	if err := client.ReportPlaybackProgress(itemID, positionTicks, state.IsPaused); err != nil {
+		log.Printf("Warning: failed to report playback progress: %v", err)
+	} else {
+		log.Printf("Reported playback progress (paused: %v, position: %d ms)", state.IsPaused, positionMs)
+	}
+}
+
+func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client *jellyfin.Client) error {
+	playerLock.Lock()
+	p := activePlayer
 	playerLock.Unlock()
 
-	if player == nil || state == nil {
+	if p == nil {
 		return fmt.Errorf("no active player")
 	}
 
 	command := playstateData.Command
 	log.Printf("Received Playstate command: %s", command)
 
-	var shouldReport bool = true
-
-	playerLock.Lock()
-	defer playerLock.Unlock()
-
 	switch command {
 	case "Pause":
-		if !state.IsPaused {
-			if err := player.SetPause(true); err != nil {
-				return fmt.Errorf("failed to pause: %w", err)
-			}
-			state.IsPaused = true
-			state.PausedAt = time.Now()
-			log.Println("Player paused")
+		if err := p.Pause(); err != nil {
+			return fmt.Errorf("failed to pause: %w", err)
 		}
+		UpdatePlaybackStatus(client, p)
 	case "Unpause":
-		if state.IsPaused {
-			if err := player.SetPause(false); err != nil {
-				return fmt.Errorf("failed to unpause: %w", err)
-			}
-			// Add the paused duration to total
-			state.TotalPausedDur += time.Since(state.PausedAt)
-			state.IsPaused = false
-			log.Println("Player unpaused")
+		if err := p.Unpause(); err != nil {
+			return fmt.Errorf("failed to unpause: %w", err)
 		}
+		UpdatePlaybackStatus(client, p)
 	case "PlayPause":
-		// Toggle pause state
-		if state.IsPaused {
-			if err := player.SetPause(false); err != nil {
-				return fmt.Errorf("failed to unpause: %w", err)
-			}
-			// Add the paused duration to total
-			state.TotalPausedDur += time.Since(state.PausedAt)
-			state.IsPaused = false
-			log.Println("Player unpaused (toggle)")
-		} else {
-			if err := player.SetPause(true); err != nil {
-				return fmt.Errorf("failed to pause: %w", err)
-			}
-			state.IsPaused = true
-			state.PausedAt = time.Now()
-			log.Println("Player paused (toggle)")
+		if err := p.TogglePause(); err != nil {
+			return fmt.Errorf("failed to toggle pause: %w", err)
 		}
+		UpdatePlaybackStatus(client, p)
 	case "Stop":
-		player.Stop()
-		log.Println("Player stopped")
-		shouldReport = false // Stop will be reported elsewhere
+		p.Stop()
 	case "NextTrack":
 		log.Println("NextTrack not yet implemented")
-		shouldReport = false
 	case "PreviousTrack":
 		log.Println("PreviousTrack not yet implemented")
-		shouldReport = false
 	case "Seek":
-		if playstateData.SeekPositionTicks > 0 {
-			// Convert ticks to milliseconds (1 tick = 100 nanoseconds)
-			seekTimeMs := playstateData.SeekPositionTicks / 10000
-			if err := player.SetMediaTime(int(seekTimeMs)); err != nil {
-				return fmt.Errorf("failed to seek: %w", err)
-			}
-
-			// Update our local state tracking
-			state.SeekOffset = seekTimeMs
-			state.StartTime = time.Now()
-			state.TotalPausedDur = 0
-			if state.IsPaused {
-				state.PausedAt = time.Now()
-			}
-			log.Printf("Seeked to position: %d ms", seekTimeMs)
-		} else {
-			shouldReport = false
-		}
+		log.Println("Seek not yet implemented")
+		// if playstateData.SeekPositionTicks > 0 {
+		// 	// Convert ticks to milliseconds (1 tick = 100 nanoseconds)
+		// 	seekTimeMs := playstateData.SeekPositionTicks / 10000
+		// 	if err := p.Seek(seekTimeMs); err != nil {
+		// 		return fmt.Errorf("failed to seek: %w", err)
+		// 	}
+		// } else {
+		// 	shouldReport = false
+		// }
 	default:
 		log.Printf("Unknown playstate command: %s", command)
-		shouldReport = false
-	}
-
-	// Report the playback progress to Jellyfin
-	if shouldReport && creds != nil && config != nil && itemID != "" {
-		positionMs := state.GetCurrentPositionMs()
-		positionTicks := int64(positionMs) * 10000
-
-		if err := reportPlaybackProgress(creds.ServerURL, itemID, positionTicks, state.IsPaused, creds, config); err != nil {
-			log.Printf("Warning: failed to report playback progress: %v", err)
-		} else {
-			log.Printf("Reported playback progress (paused: %v, position: %d ms)", state.IsPaused, positionMs)
-		}
-	}
-
-	return nil
-}
-
-func getDirectStreamURL(serverURL, itemID string, config *Configuration, token string) string {
-	// Construct direct stream URL
-	// Format: /Videos/{itemId}/stream?static=true&DeviceId={deviceId}&api_key={token}
-	return fmt.Sprintf("%s/Videos/%s/stream?static=true&DeviceId=%s&api_key=%s",
-		serverURL, itemID, config.DeviceID, token)
-}
-
-func reportPlaybackStart(serverURL, itemID string, positionTicks int64, creds *Credentials, config *Configuration) error {
-	data := map[string]interface{}{
-		"ItemId":        itemID,
-		"PositionTicks": positionTicks,
-		"IsPaused":      false,
-		"IsMuted":       false,
-		"VolumeLevel":   100,
-		"PlayMethod":    "DirectPlay",
-		"CanSeek":       true,
-	}
-
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("failed to marshal playback start data: %w", err)
-	}
-
-	endpoint := fmt.Sprintf("%s/Sessions/Playing", serverURL)
-	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", makeAuthHeader(config, creds.AccessToken))
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to report playback start with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	return nil
-}
-
-func reportPlaybackProgress(serverURL, itemID string, positionTicks int64, isPaused bool, creds *Credentials, config *Configuration) error {
-	data := map[string]interface{}{
-		"ItemId":        itemID,
-		"PositionTicks": positionTicks,
-		"IsPaused":      isPaused,
-		"IsMuted":       false,
-		"VolumeLevel":   100,
-		"PlayMethod":    "DirectPlay",
-		"CanSeek":       true,
-	}
-
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("failed to marshal playback progress data: %w", err)
-	}
-
-	endpoint := fmt.Sprintf("%s/Sessions/Playing/Progress", serverURL)
-	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", makeAuthHeader(config, creds.AccessToken))
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to report playback progress with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	return nil
-}
-
-func reportPlaybackStopped(serverURL, itemID string, positionTicks int64, creds *Credentials, config *Configuration) error {
-	data := map[string]interface{}{
-		"ItemId":        itemID,
-		"PositionTicks": positionTicks,
-	}
-
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("failed to marshal playback stopped data: %w", err)
-	}
-
-	endpoint := fmt.Sprintf("%s/Sessions/Playing/Stopped", serverURL)
-	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", makeAuthHeader(config, creds.AccessToken))
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to report playback stopped with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	return nil
-}
-
-func registerCapabilities(serverURL string, config *Configuration, token string) error {
-	caps := Capabilities{
-		PlayableMediaTypes:   "Video",
-		SupportsMediaControl: true,
-		SupportedCommands: strings.Join([]string{
-			"Play",
-			"Playstate",
-			"PlayNext",
-			"PlayMediaSource",
-			"SetVolume",
-			"SetAudioStreamIndex",
-			"SetSubtitleStreamIndex",
-			"Stop",
-			"Seek",
-		}, ","),
-	}
-
-	jsonData, err := json.Marshal(caps)
-	if err != nil {
-		return fmt.Errorf("failed to marshal capabilities: %w", err)
-	}
-
-	endpoint := fmt.Sprintf("%s/Sessions/Capabilities/Full", serverURL)
-	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", makeAuthHeader(config, token))
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to register capabilities with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	return nil
-}
-
-func connectWebSocket(creds *Credentials, config *Configuration) error {
-	// Convert HTTP(S) URL to WS(S)
-	u, err := url.Parse(creds.ServerURL)
-	if err != nil {
-		return fmt.Errorf("failed to parse server URL: %w", err)
-	}
-
-	wsScheme := "ws"
-	if u.Scheme == "https" {
-		wsScheme = "wss"
-	}
-
-	wsURL := fmt.Sprintf("%s://%s/socket?api_key=%s&device_id=%s", wsScheme, u.Host, creds.AccessToken, config.DeviceID)
-
-	log.Printf("Connecting to WebSocket: %s", wsURL)
-
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to connect to WebSocket: %w", err)
-	}
-	defer conn.Close()
-
-	log.Println("WebSocket connected successfully!")
-	log.Println("Listening for messages from Jellyfin server...")
-	log.Println("Press Ctrl+C to stop")
-
-	// Handle graceful shutdown
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
-
-	done := make(chan struct{})
-
-	// Read messages
-	go func() {
-		defer close(done)
-		for {
-			var msg WebSocketMessage
-			err := conn.ReadJSON(&msg)
-			if err != nil {
-				log.Printf("Error reading message: %v", err)
-				return
-			}
-
-			// Pretty print the message
-			jsonData, err := json.MarshalIndent(msg, "", "  ")
-			if err != nil {
-				log.Printf("Error marshaling message: %v", err)
-				continue
-			}
-
-			log.Printf("Received message:\n%s\n", string(jsonData))
-
-			// Handle different message types
-			switch msg.MessageType {
-			case "ForceKeepAlive":
-				log.Println("Sending KeepAlive response...")
-				keepAlive := map[string]string{
-					"MessageType": "KeepAlive",
-				}
-				if err := conn.WriteJSON(keepAlive); err != nil {
-					log.Printf("Error sending keep-alive: %v", err)
-					return
-				}
-
-				// Start periodic keep-alive
-				if dataMap, ok := msg.Data.(map[string]interface{}); ok {
-					if timeoutSec, ok := dataMap["Timeout"].(float64); ok {
-						go func() {
-							ticker := time.NewTicker(time.Duration(timeoutSec/2) * time.Second)
-							defer ticker.Stop()
-
-							for {
-								select {
-								case <-ticker.C:
-									keepAlive := map[string]string{
-										"MessageType": "KeepAlive",
-									}
-									if err := conn.WriteJSON(keepAlive); err != nil {
-										log.Printf("Error sending periodic keep-alive: %v", err)
-										return
-									}
-									log.Println("Sent periodic KeepAlive")
-								case <-done:
-									return
-								}
-							}
-						}()
-					}
-				}
-
-			case "Play":
-				log.Println("Received Play command")
-
-				// Parse the play command data
-				dataJSON, err := json.Marshal(msg.Data)
-				if err != nil {
-					log.Printf("Error marshaling play data: %v", err)
-					continue
-				}
-
-				var playData PlayCommandData
-				if err := json.Unmarshal(dataJSON, &playData); err != nil {
-					log.Printf("Error parsing play command: %v", err)
-					continue
-				}
-
-				// Handle the play command in a separate goroutine to not block message processing
-				go func() {
-					if err := handlePlayCommand(playData, creds, config); err != nil {
-						log.Printf("Error handling play command: %v", err)
-					}
-				}()
-
-			case "Playstate":
-				log.Println("Received Playstate command")
-
-				// Parse the playstate command data
-				dataJSON, err := json.Marshal(msg.Data)
-				if err != nil {
-					log.Printf("Error marshaling playstate data: %v", err)
-					continue
-				}
-
-				var playstateData PlaystateCommandData
-				if err := json.Unmarshal(dataJSON, &playstateData); err != nil {
-					log.Printf("Error parsing playstate command: %v", err)
-					continue
-				}
-
-				// Handle the playstate command
-				if err := handlePlaystateCommand(playstateData); err != nil {
-					log.Printf("Error handling playstate command: %v", err)
-				}
-			}
-		}
-	}()
-
-	// Wait for interrupt signal
-	select {
-	case <-interrupt:
-		log.Printf("Shutting down...")
-		err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-		if err != nil {
-			log.Printf("Error sending close message: %v", err)
-		}
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-		}
-	case <-done:
-	}
-
-	return nil
-}
-
-func runClient() error {
-	// Load configuration
-	config, err := loadConfiguration()
-	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
-	}
-
-	// Load credentials
-	creds, err := loadCredentials()
-	if err != nil {
-		return fmt.Errorf("failed to load credentials: %w\nPlease run 'jellyfin-vlc-shim auth' first", err)
-	}
-
-	log.Printf("Starting Jellyfin VLC Shim client")
-	log.Printf("Server: %s", creds.ServerURL)
-	log.Printf("User: %s", creds.Username)
-	log.Printf("Device ID: %s", config.DeviceID)
-
-	// Register capabilities
-	log.Println("Registering capabilities with Jellyfin server...")
-	if err := registerCapabilities(creds.ServerURL, config, creds.AccessToken); err != nil {
-		return fmt.Errorf("failed to register capabilities: %w", err)
-	}
-	log.Println("Capabilities registered successfully!")
-
-	// Connect to WebSocket
-	if err := connectWebSocket(creds, config); err != nil {
-		return fmt.Errorf("WebSocket error: %w", err)
 	}
 
 	return nil
 }
 
 func playVideo(path string) error {
-	// Initialize libVLC with minimal flags to avoid video output issues
-	// "-vv" to enable verbose logging
-	if err := vlc.Init("--no-xlib"); err != nil {
-		return fmt.Errorf("failed to initialize libVLC: %w", err)
-	}
-	defer vlc.Release()
-
-	// Create a new player
-	player, err := vlc.NewPlayer()
+	// Create player with minimal VLC flags for local playback
+	p, err := player.New(&player.Options{
+		VLCArgs: []string{"--no-xlib"},
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create player: %w", err)
 	}
-	defer func() {
-		player.Stop()
-		player.Release()
-	}()
-
-	// Convert to absolute path if relative
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("failed to resolve path: %w", err)
-	}
-
-	// Check if file exists
-	if _, err := os.Stat(absPath); os.IsNotExist(err) {
-		return fmt.Errorf("file does not exist: %s", absPath)
-	}
-
-	log.Printf("Loading media: %s", absPath)
+	defer p.Release()
 
 	// Load media from path
-	media, err := player.LoadMediaFromPath(absPath)
+	media, err := p.LoadMediaFromPath(path)
 	if err != nil {
-		return fmt.Errorf("failed to load media: %w", err)
+		return err
 	}
 	defer media.Release()
 
-	// Get event manager
-	manager, err := player.EventManager()
+	// Setup end reached event
+	done, err := p.ListenEndReachedEvent()
 	if err != nil {
-		return fmt.Errorf("failed to get event manager: %w", err)
+		return err
 	}
-
-	// Channel to signal when playback ends
-	done := make(chan struct{})
-
-	// Register end reached event
-	eventCallback := func(event vlc.Event, userData interface{}) {
-		log.Println("Playback finished")
-		close(done)
-	}
-
-	eventID, err := manager.Attach(vlc.MediaPlayerEndReached, eventCallback, nil)
-	if err != nil {
-		return fmt.Errorf("failed to attach event: %w", err)
-	}
-	defer manager.Detach(eventID)
 
 	// Start playing
-	log.Println("Starting playback...")
-	if err := player.Play(); err != nil {
-		return fmt.Errorf("failed to start playback: %w", err)
+	if err := p.Play(); err != nil {
+		return err
 	}
-
-	// Handle Ctrl+C to stop playback gracefully
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
-
-	log.Println("Playing... Press Ctrl+C to stop")
 
 	// Wait for playback to finish or interrupt
-	select {
-	case <-done:
-		log.Println("Video playback completed")
-	case <-interrupt:
-		log.Println("Stopping playback...")
-		player.Stop()
-	}
+	p.WaitForEndOrInterrupt(done)
 
 	return nil
 }
 
-func setupEndReachedEvent(manager *vlc.EventManager) (chan struct{}, error) {
-	// Channel to signal when playback ends
-	done := make(chan struct{})
-
-	// Register end reached event
-	eventCallback := func(event vlc.Event, userData interface{}) {
-		log.Println("Playback finished")
-		close(done)
-	}
-
-	eventID, err := manager.Attach(vlc.MediaPlayerEndReached, eventCallback, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to attach event: %w", err)
-	}
-
-	// Detach event when done channel is closed
-	go func() {
-		<-done
-		manager.Detach(eventID)
-	}()
-
-	return done, nil
-}
-
-func playVideoURLWithProgress(mediaURL, itemID string, creds *Credentials, config *Configuration) error {
-	// Initialize libVLC with fullscreen flag
-	if err := vlc.Init("--fullscreen"); err != nil {
-		return fmt.Errorf("failed to initialize libVLC: %w", err)
-	}
-	defer vlc.Release()
-
-	// Create a new player
-	player, err := vlc.NewPlayer()
+func playJellyfinVideo(mediaURL, itemID string, client *jellyfin.Client) error {
+	// Create player with fullscreen
+	p, err := player.New(player.DefaultOptions())
 	if err != nil {
 		return fmt.Errorf("failed to create player: %w", err)
 	}
@@ -1081,96 +389,57 @@ func playVideoURLWithProgress(mediaURL, itemID string, creds *Credentials, confi
 		playerLock.Lock()
 		activePlayer = nil
 		activeItemID = ""
-		activeCreds = nil
-		activeConfig = nil
-		playerState = nil
 		playerLock.Unlock()
-		player.Stop()
-		player.Release()
+		p.Release()
 	}()
 
 	// Set the global active player and playback context
 	playerLock.Lock()
-	activePlayer = player
+	activePlayer = p
 	activeItemID = itemID
-	activeCreds = creds
-	activeConfig = config
-	playerState = &PlayerState{
-		IsPaused:       false,
-		StartTime:      time.Now(),
-		TotalPausedDur: 0,
-		SeekOffset:     0,
-	}
 	playerLock.Unlock()
 
-	log.Printf("Loading media from URL: %s", mediaURL)
-
 	// Load media from URL
-	media, err := player.LoadMediaFromURL(mediaURL)
+	media, err := p.LoadMediaFromURL(mediaURL)
 	if err != nil {
 		return fmt.Errorf("failed to load media: %w", err)
 	}
 	defer media.Release()
 
-	// Get event manager
-	manager, err := player.EventManager()
-	if err != nil {
-		return fmt.Errorf("failed to get event manager: %w", err)
-	}
-
 	// Setup end reached event
-	done, err := setupEndReachedEvent(manager)
+	done, err := p.ListenEndReachedEvent()
 	if err != nil {
 		return err
 	}
 
 	// Start playing
-	log.Println("Starting playback...")
-	if err := player.Play(); err != nil {
+	if err := p.Play(); err != nil {
 		return fmt.Errorf("failed to start playback: %w", err)
 	}
-
-	// Set fullscreen mode
-	//player.SetFullScreen(true)
 
 	// Wait a bit for the player to actually start playing
 	time.Sleep(500 * time.Millisecond)
 
 	// Report playback start to Jellyfin
-	if err := reportPlaybackStart(creds.ServerURL, itemID, 0, creds, config); err != nil {
+	if err := client.ReportPlaybackStart(itemID, 0); err != nil {
 		log.Printf("Warning: failed to report playback start: %v", err)
 	} else {
 		log.Println("Playback start reported to Jellyfin")
 	}
 
-	// Handle Ctrl+C to stop playback gracefully
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
-
 	log.Println("Playing in fullscreen... Press Ctrl+C to stop")
 
 	// Wait for playback to finish or interrupt
-	var finalPositionTicks int64
-	select {
-	case <-done:
-		log.Println("Video playback completed")
-		// Get final position
-		if finalTimeMs, err := player.MediaTime(); err == nil {
-			finalPositionTicks = int64(finalTimeMs) * 10000
-		}
-	case <-interrupt:
-		log.Println("Stopping playback...")
-		// Get current position before stopping
-		if finalTimeMs, err := player.MediaTime(); err == nil {
-			finalPositionTicks = int64(finalTimeMs) * 10000
-		}
-		player.Stop()
-	}
+	p.WaitForEndOrInterrupt(done)
 
-	// Report playback stopped to Jellyfin
-	if err := reportPlaybackStopped(creds.ServerURL, itemID, finalPositionTicks, creds, config); err != nil {
-		log.Printf("Warning: failed to report playback stopped: %v", err)
-	}
+	// Get final position from state and report playback stopped
+	// state := p.GetState()
+	// finalPositionMs := state.GetCurrentPositionMs()
+	// finalPositionTicks := int64(finalPositionMs) * 10000
+
+	// if err := client.ReportPlaybackStopped(itemID, finalPositionTicks); err != nil {
+	// 	log.Printf("Warning: failed to report playback stopped: %v", err)
+	// }
 
 	return nil
 }

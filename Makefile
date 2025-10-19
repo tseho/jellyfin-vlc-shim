@@ -3,7 +3,16 @@
 .PHONY: build
 build: jellyfin-vlc-shim
 
-jellyfin-vlc-shim: main.go go.mod go.sum
+jellyfin-vlc-shim: go.mod
+jellyfin-vlc-shim: go.sum
+jellyfin-vlc-shim: main.go
+jellyfin-vlc-shim: config/config.go
+jellyfin-vlc-shim: jellyfin/auth.go
+jellyfin-vlc-shim: jellyfin/client.go
+jellyfin-vlc-shim: jellyfin/types.go
+jellyfin-vlc-shim: player/events.go
+jellyfin-vlc-shim: player/player.go
+jellyfin-vlc-shim: 
 	go build -o jellyfin-vlc-shim
 
 .PHONY: tests
@@ -11,13 +20,15 @@ tests: build
 tests: export CI ?= 1
 tests:
 	(cd tests && docker compose --profile server up -d)
-	@kill `cat .tmp/pid` > /dev/null 2>&1 || true
+	@killall jellyfin-vlc-shim > /dev/null 2>&1 || true
+	@killall -9 jellyfin-vlc-shim > /dev/null 2>&1 || true
 	@rm -rf .tmp
 	@mkdir -p .tmp
 	./jellyfin-vlc-shim --config .tmp/config auth --url http://localhost:8096 --username admin --password admin --device-name TV
-	./jellyfin-vlc-shim --config .tmp/config run & echo $$! > .tmp/pid
-	@trap 'kill `cat .tmp/pid` > /dev/null 2>&1 || true' EXIT; \
+	./jellyfin-vlc-shim --config .tmp/config run &
 	(cd tests/playwright && npm run test)
+	@killall jellyfin-vlc-shim > /dev/null 2>&1 || true
+	@killall -9 jellyfin-vlc-shim > /dev/null 2>&1 || true
 
 .PHONY: sources
 sources: sources/jellyfin-mpv-shim
