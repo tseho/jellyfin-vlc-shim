@@ -132,6 +132,45 @@ func handlePlayCommand(playData jellyfin.PlayCommandData, client *jellyfin.Clien
 
 	log.Printf("Playing: %s (Type: %s)", itemInfo.Name, itemInfo.Type)
 
+	// Log MediaSourceId if present
+	if playData.MediaSourceId != "" {
+		log.Printf("MediaSourceId: %s", playData.MediaSourceId)
+	}
+
+	// Log subtitle stream information if requested
+	if playData.SubtitleStreamIndex != nil {
+		log.Printf("SubtitleStreamIndex requested: %d", *playData.SubtitleStreamIndex)
+
+		// Try to find information about the subtitle stream
+		if len(itemInfo.MediaSources) > 0 {
+			var mediaSource *jellyfin.MediaSource
+
+			// Find the matching media source
+			if playData.MediaSourceId != "" {
+				for i := range itemInfo.MediaSources {
+					if itemInfo.MediaSources[i].Id == playData.MediaSourceId {
+						mediaSource = &itemInfo.MediaSources[i]
+						break
+					}
+				}
+			} else {
+				// Use the first media source if no specific source is requested
+				mediaSource = &itemInfo.MediaSources[0]
+			}
+
+			if mediaSource != nil {
+				// Find the subtitle stream
+				for _, stream := range mediaSource.MediaStreams {
+					if stream.Type == "Subtitle" && stream.Index == *playData.SubtitleStreamIndex {
+						streamJSON, _ := json.MarshalIndent(stream, "", "  ")
+						log.Printf("Subtitle stream info: %s", string(streamJSON))
+						break
+					}
+				}
+			}
+		}
+	}
+
 	// Get the direct stream URL
 	streamURL := client.GetDirectStreamURL(itemID)
 	log.Printf("Stream URL: %s", streamURL)

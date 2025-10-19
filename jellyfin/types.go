@@ -36,9 +36,21 @@ type ItemInfo struct {
 
 // MediaSource represents a media source for an item
 type MediaSource struct {
-	Id                 string `json:"Id"`
-	Protocol           string `json:"Protocol"`
-	SupportsDirectPlay bool   `json:"SupportsDirectPlay"`
+	Id                 string        `json:"Id"`
+	Protocol           string        `json:"Protocol"`
+	SupportsDirectPlay bool          `json:"SupportsDirectPlay"`
+	MediaStreams       []MediaStream `json:"MediaStreams"`
+}
+
+// MediaStream represents a stream (video, audio, subtitle) in a media source
+type MediaStream struct {
+	Index        int    `json:"Index"`
+	Type         string `json:"Type"`
+	Codec        string `json:"Codec"`
+	Language     string `json:"Language,omitempty"`
+	DisplayTitle string `json:"DisplayTitle,omitempty"`
+	Path         string `json:"Path,omitempty"`
+	IsExternal   bool   `json:"IsExternal"`
 }
 
 // WebSocketMessage is a message received from the Jellyfin WebSocket
@@ -49,9 +61,11 @@ type WebSocketMessage struct {
 
 // PlayCommandData contains data for a Play command
 type PlayCommandData struct {
-	ControllingUserId string   `json:"ControllingUserId"`
-	ItemIds           []string `json:"ItemIds"`
-	PlayCommand       string   `json:"PlayCommand"`
+	ControllingUserId    string   `json:"ControllingUserId"`
+	ItemIds              []string `json:"ItemIds"`
+	PlayCommand          string   `json:"PlayCommand"`
+	MediaSourceId        string   `json:"MediaSourceId,omitempty"`
+	SubtitleStreamIndex  *int     `json:"SubtitleStreamIndex,omitempty"`
 }
 
 // PlaystateCommandData contains data for playstate commands
