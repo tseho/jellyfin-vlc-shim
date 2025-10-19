@@ -1,1 +1,4 @@
 jellyfin-vlc-shim
+sources
+.tmp
+.config

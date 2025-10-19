@@ -11,4 +11,5 @@ test('Cast is available', async ({ page }) => {
   await page.getByRole('button', { name: 'Cast to Device' }).click();
 
   await expect(page.getByRole('button', { name: 'My Device admin' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'TV - jellyfin-vlc-shim admin' })).toBeVisible();
 });
