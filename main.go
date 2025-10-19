@@ -43,7 +43,10 @@ type Credentials struct {
 	AccessToken string `json:"accessToken"`
 	UserID      string `json:"userId"`
 	Username    string `json:"username"`
-	DeviceID    string `json:"deviceId"`
+}
+
+type Configuration struct {
+	DeviceID string `json:"deviceId"`
 }
 
 type Capabilities struct {
@@ -161,11 +164,14 @@ func authenticate() error {
 		inputPassword = string(passwordBytes)
 	}
 
-	// Should we load the existing one if exists?
-	deviceID := generateDeviceID()
+	// Load or initialize configuration
+	config, err := loadConfiguration()
+	if err != nil {
+		return fmt.Errorf("failed to load configuration: %w", err)
+	}
 
 	// Authenticate with Jellyfin
-	authResult, err := authenticateWithJellyfin(inputURL, inputUsername, inputPassword, deviceID)
+	authResult, err := authenticateWithJellyfin(inputURL, inputUsername, inputPassword, config.DeviceID)
 	if err != nil {
 		return fmt.Errorf("authentication failed: %w", err)
 	}
@@ -176,7 +182,6 @@ func authenticate() error {
 		AccessToken: authResult.AccessToken,
 		UserID:      authResult.User.Id,
 		Username:    authResult.User.Name,
-		DeviceID:    deviceID,
 	}
 
 	if err := saveCredentials(creds); err != nil {
@@ -276,6 +281,62 @@ func loadCredentials() (*Credentials, error) {
 	}
 
 	return &creds, nil
+}
+
+func loadConfiguration() (*Configuration, error) {
+	dir, err := getConfigDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get config directory: %w", err)
+	}
+
+	configPath := filepath.Join(dir, "configuration.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Initialize with new device ID if file doesn't exist
+			config := &Configuration{
+				DeviceID: generateDeviceID(),
+			}
+			if saveErr := saveConfiguration(config); saveErr != nil {
+				return nil, fmt.Errorf("failed to initialize configuration: %w", saveErr)
+			}
+			return config, nil
+		}
+		return nil, fmt.Errorf("failed to read configuration file: %w", err)
+	}
+
+	var config Configuration
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse configuration: %w", err)
+	}
+
+	return &config, nil
+}
+
+func saveConfiguration(config *Configuration) error {
+	dir, err := getConfigDir()
+	if err != nil {
+		return fmt.Errorf("failed to get config directory: %w", err)
+	}
+
+	// Create config directory if it doesn't exist
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Marshal configuration to JSON
+	jsonData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal configuration: %w", err)
+	}
+
+	// Write to file
+	configPath := filepath.Join(dir, "configuration.json")
+	if err := os.WriteFile(configPath, jsonData, 0600); err != nil {
+		return fmt.Errorf("failed to write configuration file: %w", err)
+	}
+
+	return nil
 }
 
 func generateDeviceID() string {
@@ -446,6 +507,12 @@ func connectWebSocket(serverURL, deviceID, token string) error {
 }
 
 func runClient() error {
+	// Load configuration
+	config, err := loadConfiguration()
+	if err != nil {
+		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+
 	// Load credentials
 	creds, err := loadCredentials()
 	if err != nil {
@@ -455,17 +522,17 @@ func runClient() error {
 	log.Printf("Starting Jellyfin VLC Shim client")
 	log.Printf("Server: %s", creds.ServerURL)
 	log.Printf("User: %s", creds.Username)
-	log.Printf("Device ID: %s", creds.DeviceID)
+	log.Printf("Device ID: %s", config.DeviceID)
 
 	// Register capabilities
 	log.Println("Registering capabilities with Jellyfin server...")
-	if err := registerCapabilities(creds.ServerURL, creds.DeviceID, creds.AccessToken); err != nil {
+	if err := registerCapabilities(creds.ServerURL, config.DeviceID, creds.AccessToken); err != nil {
 		return fmt.Errorf("failed to register capabilities: %w", err)
 	}
 	log.Println("Capabilities registered successfully!")
 
 	// Connect to WebSocket
-	if err := connectWebSocket(creds.ServerURL, creds.DeviceID, creds.AccessToken); err != nil {
+	if err := connectWebSocket(creds.ServerURL, config.DeviceID, creds.AccessToken); err != nil {
 		return fmt.Errorf("WebSocket error: %w", err)
 	}
 
