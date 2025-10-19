@@ -1,0 +1,8 @@
+config/data/ScheduledTasks
+config/log
+config/data/jellyfin.db-shm
+config/data/jellyfin.db-wal
+config/data/library.db-shm
+config/data/library.db-wal
+config/data/playlists
+config/metadata/views
