@@ -1,0 +1,11 @@
+1
+00:00:00,000 --> 00:00:2,000
+Les sangliers grognent.
+
+2
+00:00:03,000 --> 00:00:05,000
+L'oisillon piaille.
+
+9
+00:00:06,250 --> 00:00:08,250
+La branche craque.

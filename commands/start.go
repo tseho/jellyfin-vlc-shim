@@ -3,7 +3,10 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -12,6 +15,7 @@ import (
 	"jellyfin-vlc-shim/player"
 
 	"github.com/spf13/cobra"
+	ffmpeg "github.com/u2takey/ffmpeg-go"
 )
 
 var (
@@ -130,57 +134,32 @@ func handlePlayCommand(playData jellyfin.PlayCommandData, client *jellyfin.Clien
 		return fmt.Errorf("failed to get item info: %w", err)
 	}
 
-	log.Printf("Playing: %s (Type: %s)", itemInfo.Name, itemInfo.Type)
+	log.Printf("Playing: %s", itemInfo.Name)
+	itemInfoJSON, _ := json.MarshalIndent(itemInfo, "", "  ")
+	log.Printf("Item info: %s", string(itemInfoJSON))
 
 	// Log MediaSourceId if present
 	if playData.MediaSourceId != "" {
 		log.Printf("MediaSourceId: %s", playData.MediaSourceId)
 	}
 
-	// Log subtitle stream information if requested
-	if playData.SubtitleStreamIndex != nil {
-		log.Printf("SubtitleStreamIndex requested: %d", *playData.SubtitleStreamIndex)
-
-		// Try to find information about the subtitle stream
-		if len(itemInfo.MediaSources) > 0 {
-			var mediaSource *jellyfin.MediaSource
-
-			// Find the matching media source
-			if playData.MediaSourceId != "" {
-				for i := range itemInfo.MediaSources {
-					if itemInfo.MediaSources[i].Id == playData.MediaSourceId {
-						mediaSource = &itemInfo.MediaSources[i]
-						break
-					}
-				}
-			} else {
-				// Use the first media source if no specific source is requested
-				mediaSource = &itemInfo.MediaSources[0]
-			}
-
-			if mediaSource != nil {
-				// Find the subtitle stream
-				for _, stream := range mediaSource.MediaStreams {
-					if stream.Type == "Subtitle" && stream.Index == *playData.SubtitleStreamIndex {
-						streamJSON, _ := json.MarshalIndent(stream, "", "  ")
-						log.Printf("Subtitle stream info: %s", string(streamJSON))
-						break
-					}
-				}
-			}
-		}
-	}
-
 	// Get the direct stream URL
-	streamURL := client.GetDirectStreamURL(itemID)
-	log.Printf("Stream URL: %s", streamURL)
+	videoStreamURL := client.GetVideoDirectStreamURL(itemID)
+	log.Printf("Video URL: %s", videoStreamURL)
 
-	// Play the video using VLC with progress reporting
-	if err := playJellyfinVideo(streamURL, itemID, client, cfg); err != nil {
-		return fmt.Errorf("failed to play video: %w", err)
+	// Get subtitle
+	subtitle := client.GetSubtitleInfo(playData, itemInfo)
+	if subtitle != nil {
+		subtitleJSON, _ := json.MarshalIndent(subtitle, "", "  ")
+		log.Printf("Subtitle info: %s", string(subtitleJSON))
 	}
 
-	return nil
+	// Play with external subtitles
+	if subtitle != nil && subtitle.External {
+		return playJellyfinVideoWithExternalSubtitle(videoStreamURL, subtitle, itemID, client, cfg)
+	}
+
+	return playJellyfinVideo(videoStreamURL, subtitle, itemID, client, cfg)
 }
 
 func UpdatePlaybackStatus(client *jellyfin.Client, player *player.Player) {
@@ -234,7 +213,7 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 		if playstateData.SeekPositionTicks > 0 {
 			// Convert ticks to milliseconds (1 tick = 100 nanoseconds)
 			seekTimeMs := playstateData.SeekPositionTicks / 10000
-			if err := p.Seek(seekTimeMs); err != nil {
+			if err := p.SeekTo(seekTimeMs); err != nil {
 				return fmt.Errorf("failed to seek: %w", err)
 			}
 			UpdatePlaybackStatus(client, p)
@@ -246,10 +225,11 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 	return nil
 }
 
-func playJellyfinVideo(mediaURL, itemID string, client *jellyfin.Client, cfg *config.Config) error {
+func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID string, client *jellyfin.Client, cfg *config.Config) error {
 	// Create player with config fullscreen setting
 	p, err := player.New(&player.Options{
-		VLCArgs:    []string{"--fullscreen"},
+		// VLCArgs:    []string{"--verbose=2"},
+		VLCArgs:    []string{},
 		Fullscreen: cfg.Fullscreen,
 	})
 	if err != nil {
@@ -290,6 +270,10 @@ func playJellyfinVideo(mediaURL, itemID string, client *jellyfin.Client, cfg *co
 	// Wait a bit for the player to actually start playing
 	time.Sleep(500 * time.Millisecond)
 
+	if subtitle != nil {
+		p.EnableSubtitle(subtitle.Index)
+	}
+
 	// Report playback start to Jellyfin
 	if err := client.ReportPlaybackStart(itemID, 0); err != nil {
 		log.Printf("Warning: failed to report playback start: %v", err)
@@ -312,4 +296,81 @@ func playJellyfinVideo(mediaURL, itemID string, client *jellyfin.Client, cfg *co
 	}
 
 	return nil
+}
+
+func playJellyfinVideoWithExternalSubtitle(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID string, client *jellyfin.Client, cfg *config.Config) error {
+	subtitleTempPath := fmt.Sprintf("/tmp/%s.srt", itemID)
+	err := downloadSubtitle(*subtitle.URL, subtitleTempPath)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if err := os.Remove(subtitleTempPath); err != nil {
+			log.Printf("Warning: failed to remove subtitle file: %v", err)
+		}
+	}()
+
+	streamURL, err := startStreamWithBurnedSubtitles(mediaURL, subtitleTempPath)
+	if err != nil {
+		return fmt.Errorf("failed to start stream with burned subtitles: %w", err)
+	}
+
+	return playJellyfinVideo(streamURL, nil, itemID, client, cfg)
+}
+
+func downloadSubtitle(url, path string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to download subtitle: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to download subtitle, status: %d", resp.StatusCode)
+	}
+
+	out, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("failed to create subtitle file: %w", err)
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		return fmt.Errorf("failed to write subtitle file: %w", err)
+	}
+
+	log.Printf("Downloaded subtitle to: %s", path)
+	return nil
+}
+
+func startStreamWithBurnedSubtitles(inputURL, subtitleFile string) (string, error) {
+	outputURL := "http://0.0.0.0:8090/stream"
+
+	go func() {
+		log.Printf("Starting ffmpeg stream: %s", outputURL)
+		err := ffmpeg.Input(inputURL, ffmpeg.KwArgs{"re": ""}).
+			Filter("subtitles", ffmpeg.Args{subtitleFile}).
+			Output(outputURL, ffmpeg.KwArgs{
+				"c:v":    "libx264",
+				"preset": "veryfast",
+				"crf":    "20",
+				"tune":   "zerolatency",
+				"g":      "48",
+				"c:a":    "copy",
+				"f":      "mpegts",
+				"listen": "1",
+			}).
+			OverWriteOutput().
+			Run()
+
+		if err != nil {
+			log.Printf("Error in ffmpeg stream: %v", err)
+		}
+	}()
+
+	// Give ffmpeg a moment to start listening
+	time.Sleep(500 * time.Millisecond)
+
+	return outputURL, nil
 }

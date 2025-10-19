@@ -1,6 +1,7 @@
 package player
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -212,8 +213,8 @@ func (p *Player) TogglePause() error {
 	return p.Pause()
 }
 
-// Seek seeks to a specific position in milliseconds
-func (p *Player) Seek(positionMs int64) error {
+// SeekTo seeks to a specific position in milliseconds
+func (p *Player) SeekTo(positionMs int64) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
@@ -231,4 +232,46 @@ func (p *Player) Seek(positionMs int64) error {
 	log.Printf("Seeked to position: %d ms", positionMs)
 
 	return nil
+}
+
+// EnableSubtitles enables the first available subtitle track
+func (p *Player) EnableSubtitle(index int) error {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	if err := p.player.SetSubtitleTrack(index); err != nil {
+		return fmt.Errorf("failed to set subtitle track: %w", err)
+	}
+
+	return nil
+}
+
+// EnableSubtitles enables the first available subtitle track
+func (p *Player) EnableSubtitles() error {
+	// Get subtitle track descriptors
+	tracks, err := p.player.SubtitleTrackDescriptors()
+	if err != nil {
+		return fmt.Errorf("failed to get subtitle tracks: %w", err)
+	}
+
+	if len(tracks) == 0 {
+		return fmt.Errorf("no subtitle tracks available")
+	}
+
+	// Log all tracks as JSON
+	tracksJSON, _ := json.Marshal(tracks)
+	log.Printf("Available subtitle tracks: %s", string(tracksJSON))
+
+	// Enable the first subtitle track (usually the external one we added)
+	for _, track := range tracks {
+		if track.ID != -1 {
+			if err := p.player.SetSubtitleTrack(track.ID); err != nil {
+				return fmt.Errorf("failed to set subtitle track: %w", err)
+			}
+			log.Printf("Enabled subtitle track: %s (ID: %d)", track.Description, track.ID)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("no valid subtitle track found")
 }

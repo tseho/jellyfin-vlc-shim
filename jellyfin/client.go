@@ -85,10 +85,64 @@ func (c *Client) GetItemInfo(itemID string) (*ItemInfo, error) {
 	return &itemInfo, nil
 }
 
-// GetDirectStreamURL returns the direct stream URL for an item
-func (c *Client) GetDirectStreamURL(itemID string) string {
+// GetVideoDirectStreamURL returns the direct stream URL for an item
+func (c *Client) GetVideoDirectStreamURL(itemID string) string {
 	return fmt.Sprintf("%s/Videos/%s/stream?static=true&DeviceId=%s&api_key=%s",
 		c.ServerURL, itemID, c.DeviceID, c.AccessToken)
+}
+
+// GetSubtitleDownloadURL returns the direct stream URL for a subtitle
+func (c *Client) GetSubtitleDownloadURL(itemID, mediaSourceID string, streamIndex int) string {
+	return fmt.Sprintf("%s/Videos/%s/%s/Subtitles/%d/Stream.srt?DeviceId=%s&api_key=%s",
+		c.ServerURL, itemID, mediaSourceID, streamIndex, c.DeviceID, c.AccessToken)
+}
+
+// GetSubtitleInfo returns information about the requested subtitle
+func (c *Client) GetSubtitleInfo(playData PlayCommandData, itemInfo *ItemInfo) *SubtitleInfo {
+	if playData.SubtitleStreamIndex == nil {
+		return nil
+	}
+
+	subtitleIndex := *playData.SubtitleStreamIndex
+	if subtitleIndex < 0 {
+		return nil
+	}
+
+	// Find the media source
+	var mediaSource *MediaSource
+	if playData.MediaSourceId != "" {
+		for i := range itemInfo.MediaSources {
+			if itemInfo.MediaSources[i].Id == playData.MediaSourceId {
+				mediaSource = &itemInfo.MediaSources[i]
+				break
+			}
+		}
+	} else if len(itemInfo.MediaSources) > 0 {
+		mediaSource = &itemInfo.MediaSources[0]
+	}
+
+	if mediaSource == nil {
+		return nil
+	}
+
+	// Find the subtitle stream
+	for _, stream := range mediaSource.MediaStreams {
+		if stream.Type == "Subtitle" && stream.Index == subtitleIndex {
+			var url *string
+			if stream.IsExternal {
+				urlStr := c.GetSubtitleDownloadURL(itemInfo.Id, mediaSource.Id, stream.Index)
+				url = &urlStr
+			}
+
+			return &SubtitleInfo{
+				Index:    stream.Index,
+				External: stream.IsExternal,
+				URL:      url,
+			}
+		}
+	}
+
+	return nil
 }
 
 // RegisterCapabilities registers the client capabilities with the server

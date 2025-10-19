@@ -74,3 +74,10 @@ type PlaystateCommandData struct {
 	SeekPositionTicks  int64  `json:"SeekPositionTicks,omitempty"`
 	ControllingUserId  string `json:"ControllingUserId,omitempty"`
 }
+
+// SubtitleInfo contains information about the selected subtitle
+type SubtitleInfo struct {
+	Index    int     `json:"index"`
+	External bool    `json:"external"`
+	URL      *string `json:"url"`
+}

@@ -25,7 +25,7 @@ func NewPlayCmd(configDir *string) *cobra.Command {
 func playVideo(path string) error {
 	// Create player with minimal VLC flags for local playback
 	p, err := player.New(&player.Options{
-		VLCArgs: []string{"--no-xlib"},
+		VLCArgs: []string{"--verbose=2"},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create player: %w", err)
