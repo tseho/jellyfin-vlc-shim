@@ -6,6 +6,9 @@ build: jellyfin-vlc-shim
 jellyfin-vlc-shim: go.mod
 jellyfin-vlc-shim: go.sum
 jellyfin-vlc-shim: main.go
+jellyfin-vlc-shim: commands/auth.go
+jellyfin-vlc-shim: commands/play.go
+jellyfin-vlc-shim: commands/start.go
 jellyfin-vlc-shim: config/config.go
 jellyfin-vlc-shim: jellyfin/auth.go
 jellyfin-vlc-shim: jellyfin/client.go
@@ -25,7 +28,7 @@ tests:
 	@rm -rf .tmp
 	@mkdir -p .tmp
 	./jellyfin-vlc-shim --config .tmp/config auth --url http://localhost:8096 --username admin --password admin --device-name TV
-	./jellyfin-vlc-shim --config .tmp/config run &
+	./jellyfin-vlc-shim --config .tmp/config &
 	(cd tests/playwright && npm run test)
 	@killall jellyfin-vlc-shim > /dev/null 2>&1 || true
 	@killall -9 jellyfin-vlc-shim > /dev/null 2>&1 || true
