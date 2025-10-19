@@ -454,8 +454,8 @@ func handlePlayCommand(playData PlayCommandData, creds *Credentials, config *Con
 	streamURL := getDirectStreamURL(creds.ServerURL, itemID, config, creds.AccessToken)
 	log.Printf("Stream URL: %s", streamURL)
 
-	// Play the video using VLC
-	if err := playVideoURL(streamURL); err != nil {
+	// Play the video using VLC with progress reporting
+	if err := playVideoURLWithProgress(streamURL, itemID, creds, config); err != nil {
 		return fmt.Errorf("failed to play video: %w", err)
 	}
 
@@ -467,6 +467,121 @@ func getDirectStreamURL(serverURL, itemID string, config *Configuration, token s
 	// Format: /Videos/{itemId}/stream?static=true&DeviceId={deviceId}&api_key={token}
 	return fmt.Sprintf("%s/Videos/%s/stream?static=true&DeviceId=%s&api_key=%s",
 		serverURL, itemID, config.DeviceID, token)
+}
+
+func reportPlaybackStart(serverURL, itemID string, positionTicks int64, creds *Credentials, config *Configuration) error {
+	data := map[string]interface{}{
+		"ItemId":        itemID,
+		"PositionTicks": positionTicks,
+		"IsPaused":      false,
+		"IsMuted":       false,
+		"VolumeLevel":   100,
+		"PlayMethod":    "DirectPlay",
+		"CanSeek":       true,
+	}
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal playback start data: %w", err)
+	}
+
+	endpoint := fmt.Sprintf("%s/Sessions/Playing", serverURL)
+	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", makeAuthHeader(config, creds.AccessToken))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to report playback start with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+func reportPlaybackProgress(serverURL, itemID string, positionTicks int64, isPaused bool, creds *Credentials, config *Configuration) error {
+	data := map[string]interface{}{
+		"ItemId":        itemID,
+		"PositionTicks": positionTicks,
+		"IsPaused":      isPaused,
+		"IsMuted":       false,
+		"VolumeLevel":   100,
+		"PlayMethod":    "DirectPlay",
+		"CanSeek":       true,
+	}
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal playback progress data: %w", err)
+	}
+
+	endpoint := fmt.Sprintf("%s/Sessions/Playing/Progress", serverURL)
+	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", makeAuthHeader(config, creds.AccessToken))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to report playback progress with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+func reportPlaybackStopped(serverURL, itemID string, positionTicks int64, creds *Credentials, config *Configuration) error {
+	data := map[string]interface{}{
+		"ItemId":        itemID,
+		"PositionTicks": positionTicks,
+	}
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal playback stopped data: %w", err)
+	}
+
+	endpoint := fmt.Sprintf("%s/Sessions/Playing/Stopped", serverURL)
+	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", makeAuthHeader(config, creds.AccessToken))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to report playback stopped with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 
 func registerCapabilities(serverURL string, config *Configuration, token string) error {
@@ -765,7 +880,31 @@ func playVideo(path string) error {
 	return nil
 }
 
-func playVideoURL(mediaURL string) error {
+func setupEndReachedEvent(manager *vlc.EventManager) (chan struct{}, error) {
+	// Channel to signal when playback ends
+	done := make(chan struct{})
+
+	// Register end reached event
+	eventCallback := func(event vlc.Event, userData interface{}) {
+		log.Println("Playback finished")
+		close(done)
+	}
+
+	eventID, err := manager.Attach(vlc.MediaPlayerEndReached, eventCallback, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to attach event: %w", err)
+	}
+
+	// Detach event when done channel is closed
+	go func() {
+		<-done
+		manager.Detach(eventID)
+	}()
+
+	return done, nil
+}
+
+func playVideoURLWithProgress(mediaURL, itemID string, creds *Credentials, config *Configuration) error {
 	// Initialize libVLC with fullscreen flag
 	if err := vlc.Init("--fullscreen"); err != nil {
 		return fmt.Errorf("failed to initialize libVLC: %w", err)
@@ -797,20 +936,11 @@ func playVideoURL(mediaURL string) error {
 		return fmt.Errorf("failed to get event manager: %w", err)
 	}
 
-	// Channel to signal when playback ends
-	done := make(chan struct{})
-
-	// Register end reached event
-	eventCallback := func(event vlc.Event, userData interface{}) {
-		log.Println("Playback finished")
-		close(done)
-	}
-
-	eventID, err := manager.Attach(vlc.MediaPlayerEndReached, eventCallback, nil)
+	// Setup end reached event
+	done, err := setupEndReachedEvent(manager)
 	if err != nil {
-		return fmt.Errorf("failed to attach event: %w", err)
+		return err
 	}
-	defer manager.Detach(eventID)
 
 	// Start playing
 	log.Println("Starting playback...")
@@ -819,7 +949,17 @@ func playVideoURL(mediaURL string) error {
 	}
 
 	// Set fullscreen mode
-	player.SetFullScreen(true)
+	//player.SetFullScreen(true)
+
+	// Wait a bit for the player to actually start playing
+	time.Sleep(500 * time.Millisecond)
+
+	// Report playback start to Jellyfin
+	if err := reportPlaybackStart(creds.ServerURL, itemID, 0, creds, config); err != nil {
+		log.Printf("Warning: failed to report playback start: %v", err)
+	} else {
+		log.Println("Playback start reported to Jellyfin")
+	}
 
 	// Handle Ctrl+C to stop playback gracefully
 	interrupt := make(chan os.Signal, 1)
@@ -828,12 +968,26 @@ func playVideoURL(mediaURL string) error {
 	log.Println("Playing in fullscreen... Press Ctrl+C to stop")
 
 	// Wait for playback to finish or interrupt
+	var finalPositionTicks int64
 	select {
 	case <-done:
 		log.Println("Video playback completed")
+		// Get final position
+		if finalTimeMs, err := player.MediaTime(); err == nil {
+			finalPositionTicks = int64(finalTimeMs) * 10000
+		}
 	case <-interrupt:
 		log.Println("Stopping playback...")
+		// Get current position before stopping
+		if finalTimeMs, err := player.MediaTime(); err == nil {
+			finalPositionTicks = int64(finalTimeMs) * 10000
+		}
 		player.Stop()
+	}
+
+	// Report playback stopped to Jellyfin
+	if err := reportPlaybackStopped(creds.ServerURL, itemID, finalPositionTicks, creds, config); err != nil {
+		log.Printf("Warning: failed to report playback stopped: %v", err)
 	}
 
 	return nil
