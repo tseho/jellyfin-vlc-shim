@@ -39,14 +39,16 @@ type User struct {
 }
 
 type Credentials struct {
-	ServerURL   string `json:"serverUrl"`
-	AccessToken string `json:"accessToken"`
-	UserID      string `json:"userId"`
+	ServerURL   string `json:"server_url"`
+	AccessToken string `json:"access_token"`
+	UserID      string `json:"user_id"`
 	Username    string `json:"username"`
 }
 
 type Configuration struct {
-	DeviceID string `json:"deviceId"`
+	DeviceID       string `json:"device_id"`
+	JellyfinClient string `json:"jellyfin_client"`
+	JellyfinDevice string `json:"jellyfin_device"`
 }
 
 type Capabilities struct {
@@ -61,10 +63,11 @@ type WebSocketMessage struct {
 }
 
 var (
-	configDir string
-	serverURL string
-	username  string
-	password  string
+	configDir  string
+	serverURL  string
+	username   string
+	password   string
+	deviceName string
 )
 
 var rootCmd = &cobra.Command{
@@ -97,6 +100,7 @@ func init() {
 	authCmd.Flags().StringVar(&serverURL, "url", "", "Jellyfin server URL")
 	authCmd.Flags().StringVar(&username, "username", "", "Jellyfin username")
 	authCmd.Flags().StringVar(&password, "password", "", "Jellyfin password")
+	authCmd.Flags().StringVar(&deviceName, "device-name", "", "Device name for Jellyfin (default: hostname)")
 
 	rootCmd.AddCommand(authCmd)
 	rootCmd.AddCommand(runCmd)
@@ -170,8 +174,16 @@ func authenticate() error {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
+	// Update device name if provided
+	if deviceName != "" {
+		config.JellyfinDevice = deviceName
+		if err := saveConfiguration(config); err != nil {
+			return fmt.Errorf("failed to save configuration with device name: %w", err)
+		}
+	}
+
 	// Authenticate with Jellyfin
-	authResult, err := authenticateWithJellyfin(inputURL, inputUsername, inputPassword, config.DeviceID)
+	authResult, err := authenticateWithJellyfin(inputURL, inputUsername, inputPassword, config)
 	if err != nil {
 		return fmt.Errorf("authentication failed: %w", err)
 	}
@@ -193,7 +205,7 @@ func authenticate() error {
 	return nil
 }
 
-func authenticateWithJellyfin(baseURL, username, password string, deviceID string) (*AuthenticationResult, error) {
+func authenticateWithJellyfin(baseURL, username, password string, config *Configuration) (*AuthenticationResult, error) {
 	authReq := AuthRequest{
 		Username: username,
 		Pw:       password,
@@ -211,7 +223,7 @@ func authenticateWithJellyfin(baseURL, username, password string, deviceID strin
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Emby-Authorization", fmt.Sprintf(`MediaBrowser Client="jellyfin-vlc-shim", Device="TV", DeviceId="%s", Version="0.0.1"`, deviceID))
+	req.Header.Set("X-Emby-Authorization", fmt.Sprintf(`MediaBrowser Client="%s", Device="%s", DeviceId="%s", Version="0.0.1"`, config.JellyfinClient, config.JellyfinDevice, config.DeviceID))
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -293,9 +305,16 @@ func loadConfiguration() (*Configuration, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Initialize with new device ID if file doesn't exist
+			// Initialize with default values if file doesn't exist
+			hostname, err := os.Hostname()
+			if err != nil {
+				hostname = "Unknown" // Fallback if hostname cannot be determined
+			}
+
 			config := &Configuration{
-				DeviceID: generateDeviceID(),
+				DeviceID:       generateDeviceID(),
+				JellyfinClient: "jellyfin-vlc-shim",
+				JellyfinDevice: hostname,
 			}
 			if saveErr := saveConfiguration(config); saveErr != nil {
 				return nil, fmt.Errorf("failed to initialize configuration: %w", saveErr)
@@ -343,14 +362,14 @@ func generateDeviceID() string {
 	return uuid.New().String()
 }
 
-func makeAuthHeader(deviceID, token string) string {
+func makeAuthHeader(config *Configuration, token string) string {
 	return fmt.Sprintf(
-		`MediaBrowser Client="jellyfin-vlc-shim", Device="TV", DeviceId="%s", Version="0.0.1", Token="%s"`,
-		deviceID, token,
+		`MediaBrowser Client="%s", Device="%s", DeviceId="%s", Version="0.0.1", Token="%s"`,
+		config.JellyfinClient, config.JellyfinDevice, config.DeviceID, token,
 	)
 }
 
-func registerCapabilities(serverURL, deviceID, token string) error {
+func registerCapabilities(serverURL string, config *Configuration, token string) error {
 	caps := Capabilities{
 		PlayableMediaTypes:   "Video",
 		SupportsMediaControl: true,
@@ -379,7 +398,7 @@ func registerCapabilities(serverURL, deviceID, token string) error {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", makeAuthHeader(deviceID, token))
+	req.Header.Set("Authorization", makeAuthHeader(config, token))
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -396,7 +415,7 @@ func registerCapabilities(serverURL, deviceID, token string) error {
 	return nil
 }
 
-func connectWebSocket(serverURL, deviceID, token string) error {
+func connectWebSocket(serverURL string, config *Configuration, token string) error {
 	// Convert HTTP(S) URL to WS(S)
 	u, err := url.Parse(serverURL)
 	if err != nil {
@@ -408,7 +427,7 @@ func connectWebSocket(serverURL, deviceID, token string) error {
 		wsScheme = "wss"
 	}
 
-	wsURL := fmt.Sprintf("%s://%s/socket?api_key=%s&device_id=%s", wsScheme, u.Host, token, deviceID)
+	wsURL := fmt.Sprintf("%s://%s/socket?api_key=%s&device_id=%s", wsScheme, u.Host, token, config.DeviceID)
 
 	log.Printf("Connecting to WebSocket: %s", wsURL)
 
@@ -526,13 +545,13 @@ func runClient() error {
 
 	// Register capabilities
 	log.Println("Registering capabilities with Jellyfin server...")
-	if err := registerCapabilities(creds.ServerURL, config.DeviceID, creds.AccessToken); err != nil {
+	if err := registerCapabilities(creds.ServerURL, config, creds.AccessToken); err != nil {
 		return fmt.Errorf("failed to register capabilities: %w", err)
 	}
 	log.Println("Capabilities registered successfully!")
 
 	// Connect to WebSocket
-	if err := connectWebSocket(creds.ServerURL, config.DeviceID, creds.AccessToken); err != nil {
+	if err := connectWebSocket(creds.ServerURL, config, creds.AccessToken); err != nil {
 		return fmt.Errorf("WebSocket error: %w", err)
 	}
 

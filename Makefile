@@ -13,9 +13,9 @@ tests:
 	@kill `cat .tmp/pid` > /dev/null 2>&1 || true
 	@rm -rf .tmp
 	@mkdir -p .tmp
-	./jellyfin-vlc-shim --config .tmp/config auth --url http://localhost:8096 --username admin --password admin
+	./jellyfin-vlc-shim --config .tmp/config auth --url http://localhost:8096 --username admin --password admin --device-name TV
 	./jellyfin-vlc-shim --config .tmp/config run & echo $$! > .tmp/pid
-	(cd tests/playwright && npx playwright test)
+	(cd tests/playwright && CI=1 npx playwright test)
 	@kill `cat .tmp/pid` > /dev/null 2>&1 || true
 
 .PHONY: sources
