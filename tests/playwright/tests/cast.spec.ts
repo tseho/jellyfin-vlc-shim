@@ -28,6 +28,7 @@ test('Cast is working', async ({ page }) => {
   await page.getByRole('button', { name: 'TV - jellyfin-vlc-shim admin' }).click();
   await page.getByTitle('Videos').click();
   await page.waitForURL('**/#/list.html**');
+  await page.getByText('mp4_1080_H265_10s_5MB').click();
   await page.getByRole('link', { name: 'Big_Buck_Bunny_1080_H265_10s_5MB' }).nth(1).waitFor({ state: 'visible' });
   await page.getByRole('link', { name: 'Big_Buck_Bunny_1080_H265_10s_5MB' }).nth(1).click();
   await page.getByRole('button', { name: 'Play', exact: true }).click();
@@ -48,6 +49,7 @@ test('Cast can be paused', async ({ page }) => {
   await page.getByRole('button', { name: 'TV - jellyfin-vlc-shim admin' }).click();
   await page.getByTitle('Videos').click();
   await page.waitForURL('**/#/list.html**');
+  await page.getByText('mp4_1080_H265_10s_5MB').click();
   await page.getByRole('link', { name: 'Big_Buck_Bunny_1080_H265_10s_5MB' }).nth(1).waitFor({ state: 'visible' });
   await page.getByRole('link', { name: 'Big_Buck_Bunny_1080_H265_10s_5MB' }).nth(1).click();
   await page.getByRole('button', { name: 'Play', exact: true }).click();
