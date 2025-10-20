@@ -14,5 +14,6 @@ COPY commands commands
 COPY config config
 COPY jellyfin jellyfin
 COPY player player
+COPY logger logger
 
 RUN go build -o jellyfin-vlc-shim
