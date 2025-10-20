@@ -1,13 +1,16 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"jellyfin-vlc-shim/config"
@@ -58,12 +61,28 @@ func runClient(configDir string) error {
 	}
 
 	log.Printf("Starting Jellyfin VLC Shim client")
+	log.Printf("ConfigDir: %s", dir)
 	log.Printf("Server: %s", creds.ServerURL)
 	log.Printf("User: %s", creds.Username)
 	log.Printf("Device ID: %s", cfg.DeviceID)
 
 	// Create Jellyfin client
 	client := jellyfin.NewClient(creds.ServerURL, creds.AccessToken, creds.UserID, cfg.DeviceID, cfg.JellyfinClient, cfg.JellyfinDevice)
+
+	// Create context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle Ctrl+C and SIGTERM to stop gracefully
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(interrupt)
+
+	go func() {
+		<-interrupt
+		log.Println("Received shutdown signal, closing...")
+		cancel()
+	}()
 
 	// Register capabilities
 	log.Println("Registering capabilities with Jellyfin server...")
@@ -73,7 +92,7 @@ func runClient(configDir string) error {
 	log.Println("Capabilities registered successfully!")
 
 	// Connect to WebSocket and handle messages
-	return client.ConnectWebSocket(func(msg jellyfin.WebSocketMessage) error {
+	return client.ConnectWebSocket(ctx, func(msg jellyfin.WebSocketMessage) error {
 		switch msg.MessageType {
 		case "Play":
 			log.Println("Received Play command")
@@ -305,8 +324,9 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 
 	log.Println("Playing in fullscreen... Press Ctrl+C to stop")
 
-	// Wait for playback to finish or interrupt
-	p.WaitForEndOrInterrupt(done)
+	// Wait for playback to finish
+	<-done
+	log.Println("Video playback completed")
 
 	// Get final position from state and report playback stopped
 	state := p.GetState()

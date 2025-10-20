@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"log"
 
 	"jellyfin-vlc-shim/player"
 
@@ -50,8 +51,9 @@ func playVideo(path string) error {
 		return err
 	}
 
-	// Wait for playback to finish or interrupt
-	p.WaitForEndOrInterrupt(done)
+	// Wait for playback to finish
+	<-done
+	log.Println("Video playback completed")
 
 	return nil
 }

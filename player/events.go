@@ -3,9 +3,6 @@ package player
 import (
 	"fmt"
 	"log"
-	"os"
-	"os/signal"
-	"syscall"
 
 	vlc "github.com/adrg/libvlc-go/v3"
 )
@@ -38,23 +35,4 @@ func (p *Player) ListenEndReachedEvent() (chan struct{}, error) {
 	}()
 
 	return done, nil
-}
-
-// WaitForEndOrInterrupt waits for playback to finish or for an interrupt signal
-func (p *Player) WaitForEndOrInterrupt(done <-chan struct{}) {
-	// Handle Ctrl+C to stop playback gracefully
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(interrupt)
-
-	log.Println("Playing... Press Ctrl+C to stop")
-
-	// Wait for playback to finish or interrupt
-	select {
-	case <-done:
-		log.Println("Video playback completed")
-	case <-interrupt:
-		log.Println("Stopping playback...")
-		p.Stop()
-	}
 }

@@ -2,6 +2,7 @@ package jellyfin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -348,7 +349,7 @@ func (c *Client) ReportPlaybackStopped(itemID string, positionTicks int64) error
 type MessageHandler func(msg WebSocketMessage) error
 
 // ConnectWebSocket connects to the Jellyfin WebSocket and handles messages
-func (c *Client) ConnectWebSocket(handler MessageHandler) error {
+func (c *Client) ConnectWebSocket(ctx context.Context, handler MessageHandler) error {
 	// Convert HTTP(S) URL to WS(S)
 	u, err := url.Parse(c.ServerURL)
 	if err != nil {
@@ -393,12 +394,10 @@ func (c *Client) ConnectWebSocket(handler MessageHandler) error {
 				continue
 			}
 
-			log.Printf("Received message:\n%s\n", string(jsonData))
-
 			// Handle different message types
 			switch msg.MessageType {
 			case "ForceKeepAlive":
-				log.Println("Sending KeepAlive response...")
+				//log.Println("Sending KeepAlive response...")
 				keepAlive := map[string]string{
 					"MessageType": "KeepAlive",
 				}
@@ -432,8 +431,11 @@ func (c *Client) ConnectWebSocket(handler MessageHandler) error {
 						}()
 					}
 				}
+			case "KeepAlive":
+				continue
 
 			default:
+				log.Printf("Received message:\n%s\n", string(jsonData))
 				// Call the handler for other message types
 				if err := handler(msg); err != nil {
 					log.Printf("Error handling message: %v", err)
@@ -442,6 +444,18 @@ func (c *Client) ConnectWebSocket(handler MessageHandler) error {
 		}
 	}()
 
-	<-done
-	return nil
+	// Wait for either context cancellation or connection close
+	select {
+	case <-ctx.Done():
+		log.Println("Closing WebSocket...")
+		// Send close message gracefully
+		err := conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		if err != nil {
+			log.Printf("Error sending close message: %v", err)
+		}
+		return nil
+	case <-done:
+		return nil
+	}
 }
