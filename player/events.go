@@ -2,7 +2,6 @@ package player
 
 import (
 	"fmt"
-	"log"
 
 	vlc "github.com/adrg/libvlc-go/v3"
 )
@@ -19,7 +18,6 @@ func (p *Player) ListenEndReachedEvent() (chan struct{}, error) {
 
 	// Register end reached event
 	eventCallback := func(event vlc.Event, userData interface{}) {
-		log.Println("Playback finished")
 		close(done)
 	}
 

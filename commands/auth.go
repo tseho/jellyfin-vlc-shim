@@ -3,13 +3,14 @@ package commands
 import (
 	"bufio"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 	"syscall"
 
 	"jellyfin-vlc-shim/config"
 	"jellyfin-vlc-shim/jellyfin"
+	"jellyfin-vlc-shim/logger"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -95,6 +96,9 @@ func authenticate(configDir string) error {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
+	// Initialize logger with configured log level
+	logger.Initialize(cfg.LogLevel)
+
 	// Update device name if provided
 	if deviceName != "" {
 		cfg.JellyfinDevice = deviceName
@@ -121,7 +125,7 @@ func authenticate(configDir string) error {
 		return fmt.Errorf("failed to save credentials: %w", err)
 	}
 
-	log.Printf("Authentication successful")
-	log.Printf("Credentials saved to credentials.json")
+	slog.Info("Authentication successful")
+	slog.Info("Credentials saved to credentials.json")
 	return nil
 }

@@ -18,7 +18,8 @@ type Config struct {
 	BurnExternalSubtitles bool   `json:"burn_external_subtitles"`
 	BurnEncoder           string `json:"burn_encoder"`
 	BurnSpeed             string `json:"burn_speed"`
-	VLCVerbose            bool   `json:"vlc_verbose"`
+	VLCDebug              bool   `json:"vlc_debug"`
+	LogLevel              string `json:"log_level"`
 }
 
 // Credentials holds the authentication information
@@ -47,7 +48,7 @@ func Load(configDir string) (*Config, error) {
 		BurnExternalSubtitles: false,
 		BurnEncoder:           "libx264",
 		BurnSpeed:             "ultrafast",
-		VLCVerbose:            false,
+		LogLevel:              "info",
 	}
 
 	data, err := os.ReadFile(configPath)

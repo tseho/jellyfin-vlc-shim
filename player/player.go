@@ -3,7 +3,7 @@ package player
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -108,7 +108,7 @@ func (p *Player) LoadMediaFromPath(path string) (*vlc.Media, error) {
 		return nil, fmt.Errorf("file does not exist: %s", absPath)
 	}
 
-	log.Printf("Loading media: %s", absPath)
+	slog.Info("Loading media", "path", absPath)
 
 	// Load media from path
 	media, err := p.player.LoadMediaFromPath(absPath)
@@ -121,7 +121,7 @@ func (p *Player) LoadMediaFromPath(path string) (*vlc.Media, error) {
 
 // LoadMediaFromURL loads a media file from a URL
 func (p *Player) LoadMediaFromURL(url string) (*vlc.Media, error) {
-	log.Printf("Loading media from URL: %s", url)
+	slog.Debug("Loading media from URL", "url", url)
 
 	// Load media from URL
 	media, err := p.player.LoadMediaFromURL(url)
@@ -137,7 +137,7 @@ func (p *Player) Play() error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
-	log.Println("Starting playback...")
+	slog.Debug("Starting playback...")
 	if err := p.player.Play(); err != nil {
 		return fmt.Errorf("failed to start playback: %w", err)
 	}
@@ -157,7 +157,7 @@ func (p *Player) Stop() {
 	defer p.lock.Unlock()
 
 	p.player.Stop()
-	log.Println("Player stopped")
+	slog.Info("Player stopped")
 }
 
 // GetState returns a copy of the current playback state
@@ -179,7 +179,7 @@ func (p *Player) Pause() error {
 		}
 		p.state.IsPaused = true
 		p.state.PausedAt = time.Now()
-		log.Println("Player paused")
+		slog.Info("Player paused")
 	}
 	return nil
 }
@@ -196,7 +196,7 @@ func (p *Player) Unpause() error {
 		// Add the paused duration to total
 		p.state.TotalPausedDur += time.Since(p.state.PausedAt)
 		p.state.IsPaused = false
-		log.Println("Player unpaused")
+		slog.Info("Player unpaused")
 	}
 	return nil
 }
@@ -229,13 +229,15 @@ func (p *Player) SeekTo(positionMs int64) error {
 	if p.state.IsPaused {
 		p.state.PausedAt = time.Now()
 	}
-	log.Printf("Seeked to position: %d ms", positionMs)
+	slog.Debug("Seeked to position", "positionMs", positionMs)
 
 	return nil
 }
 
 // EnableSubtitles enables the first available subtitle track
 func (p *Player) EnableSubtitle(index int) error {
+	slog.Debug("Enable subtitle track", "index", index)
+
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
@@ -260,7 +262,7 @@ func (p *Player) EnableSubtitles() error {
 
 	// Log all tracks as JSON
 	tracksJSON, _ := json.Marshal(tracks)
-	log.Printf("Available subtitle tracks: %s", string(tracksJSON))
+	slog.Debug("Available subtitle tracks", "tracks", string(tracksJSON))
 
 	// Enable the first subtitle track (usually the external one we added)
 	for _, track := range tracks {
@@ -268,7 +270,7 @@ func (p *Player) EnableSubtitles() error {
 			if err := p.player.SetSubtitleTrack(track.ID); err != nil {
 				return fmt.Errorf("failed to set subtitle track: %w", err)
 			}
-			log.Printf("Enabled subtitle track: %s (ID: %d)", track.Description, track.ID)
+			slog.Info("Enabled subtitle track", "description", track.Description, "id", track.ID)
 			return nil
 		}
 	}

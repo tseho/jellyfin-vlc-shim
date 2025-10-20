@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +15,7 @@ import (
 
 	"jellyfin-vlc-shim/config"
 	"jellyfin-vlc-shim/jellyfin"
+	"jellyfin-vlc-shim/logger"
 	"jellyfin-vlc-shim/player"
 
 	"github.com/spf13/cobra"
@@ -54,17 +55,17 @@ func runClient(configDir string) error {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
+	// Initialize logger with configured log level
+	logger.Initialize(cfg.LogLevel)
+
 	// Load credentials
 	creds, err := config.LoadCredentials(dir)
 	if err != nil {
 		return fmt.Errorf("failed to load credentials: %w\nPlease run 'jellyfin-vlc-shim auth' first", err)
 	}
 
-	log.Printf("Starting Jellyfin VLC Shim client")
-	log.Printf("ConfigDir: %s", dir)
-	log.Printf("Server: %s", creds.ServerURL)
-	log.Printf("User: %s", creds.Username)
-	log.Printf("Device ID: %s", cfg.DeviceID)
+	slog.Info("Starting Jellyfin VLC Shim client")
+	slog.Info("Configuration loaded", "configDir", dir, "server", creds.ServerURL, "user", creds.Username, "deviceID", cfg.DeviceID)
 
 	// Create Jellyfin client
 	client := jellyfin.NewClient(creds.ServerURL, creds.AccessToken, creds.UserID, cfg.DeviceID, cfg.JellyfinClient, cfg.JellyfinDevice)
@@ -80,22 +81,22 @@ func runClient(configDir string) error {
 
 	go func() {
 		<-interrupt
-		log.Println("Received shutdown signal, closing...")
+		slog.Info("Received shutdown signal, closing...")
 		cancel()
 	}()
 
 	// Register capabilities
-	log.Println("Registering capabilities with Jellyfin server...")
+	slog.Debug("Registering capabilities with Jellyfin server...")
 	if err := client.RegisterCapabilities(); err != nil {
 		return fmt.Errorf("failed to register capabilities: %w", err)
 	}
-	log.Println("Capabilities registered successfully!")
+	slog.Debug("Capabilities registered successfully!")
 
 	// Connect to WebSocket and handle messages
 	return client.ConnectWebSocket(ctx, func(msg jellyfin.WebSocketMessage) error {
 		switch msg.MessageType {
 		case "Play":
-			log.Println("Received Play command")
+			slog.Debug("Received Play command")
 
 			// Parse the play command data
 			dataJSON, err := json.Marshal(msg.Data)
@@ -111,12 +112,12 @@ func runClient(configDir string) error {
 			// Handle the play command in a separate goroutine to not block message processing
 			go func() {
 				if err := handlePlayCommand(playData, client, cfg); err != nil {
-					log.Printf("Error handling play command: %v", err)
+					slog.Error("Error handling play command", "error", err)
 				}
 			}()
 
 		case "Playstate":
-			log.Println("Received Playstate command")
+			slog.Debug("Received Playstate command")
 
 			// Parse the playstate command data
 			dataJSON, err := json.Marshal(msg.Data)
@@ -131,7 +132,7 @@ func runClient(configDir string) error {
 
 			// Handle the playstate command
 			if err := handlePlaystateCommand(playstateData, client); err != nil {
-				log.Printf("Error handling playstate command: %v", err)
+				slog.Error("Error handling playstate command", "error", err)
 			}
 		}
 
@@ -147,30 +148,29 @@ func handlePlayCommand(playData jellyfin.PlayCommandData, client *jellyfin.Clien
 	// For now, just play the first item
 	itemID := playData.ItemIds[0]
 
-	log.Printf("Fetching info for item: %s", itemID)
+	slog.Debug("Fetching info for item", "itemID", itemID)
 	itemInfo, err := client.GetItemInfo(itemID)
 	if err != nil {
 		return fmt.Errorf("failed to get item info: %w", err)
 	}
 
-	log.Printf("Playing: %s", itemInfo.Name)
-	itemInfoJSON, _ := json.MarshalIndent(itemInfo, "", "  ")
-	log.Printf("Item info: %s", string(itemInfoJSON))
+	slog.Info("Playing", "name", itemInfo.Name)
 
-	// Log MediaSourceId if present
-	if playData.MediaSourceId != "" {
-		log.Printf("MediaSourceId: %s", playData.MediaSourceId)
-	}
+	slog.Debug("Play data", "context", playData)
+	slog.Debug("Item info", "context", itemInfo)
 
 	// Get the direct stream URL
 	videoStreamURL := client.GetVideoDirectStreamURL(itemID)
-	log.Printf("Video URL: %s", videoStreamURL)
+	slog.Debug("Video URL", "url", videoStreamURL)
 
 	// Get subtitle
 	subtitle := client.GetSubtitleInfo(playData, itemInfo)
 	if subtitle != nil {
-		subtitleJSON, _ := json.MarshalIndent(subtitle, "", "  ")
-		log.Printf("Subtitle info: %s", string(subtitleJSON))
+		slog.Debug("Subtitle info", "context", subtitle)
+	}
+
+	if !cfg.BurnExternalSubtitles {
+		slog.Debug("Burning external subtitles is disabled")
 	}
 
 	// Burn external subtitles if enabled (slow and CPU intensive)
@@ -188,9 +188,9 @@ func UpdatePlaybackStatus(client *jellyfin.Client, player *player.Player) {
 	positionTicks := int64(positionMs) * 10000
 
 	if err := client.ReportPlaybackProgress(itemID, positionTicks, state.IsPaused); err != nil {
-		log.Printf("Warning: failed to report playback progress: %v", err)
+		slog.Warn("Failed to report playback progress", "error", err)
 	} else {
-		log.Printf("Reported playback progress (paused: %v, position: %d ms)", state.IsPaused, positionMs)
+		slog.Debug("Reported playback progress", "paused", state.IsPaused, "positionMs", positionMs)
 	}
 }
 
@@ -204,7 +204,7 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 	}
 
 	command := playstateData.Command
-	log.Printf("Received Playstate command: %s", command)
+	slog.Debug("Received Playstate command", "command", command)
 
 	switch command {
 	case "Pause":
@@ -225,9 +225,9 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 	case "Stop":
 		p.Stop()
 	case "NextTrack":
-		log.Println("NextTrack not yet implemented")
+		slog.Info("NextTrack not yet implemented")
 	case "PreviousTrack":
-		log.Println("PreviousTrack not yet implemented")
+		slog.Info("PreviousTrack not yet implemented")
 	case "Seek":
 		if playstateData.SeekPositionTicks > 0 {
 			// Convert ticks to milliseconds (1 tick = 100 nanoseconds)
@@ -238,7 +238,7 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 			UpdatePlaybackStatus(client, p)
 		}
 	default:
-		log.Printf("Unknown playstate command: %s", command)
+		slog.Warn("Unknown playstate command", "command", command)
 	}
 
 	return nil
@@ -246,8 +246,10 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 
 func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID string, client *jellyfin.Client, cfg *config.Config) error {
 	vlcArgs := []string{}
-	if cfg.VLCVerbose {
+	if cfg.VLCDebug {
 		vlcArgs = append(vlcArgs, "--verbose=2")
+	} else {
+		vlcArgs = append(vlcArgs, "--quiet", "--file-logging", "--logfile=/dev/null")
 	}
 
 	p, err := player.New(&player.Options{
@@ -291,9 +293,9 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 
 		// Add the subtitle file option to VLC
 		if err := media.AddOptions(fmt.Sprintf(":sub-file=%s", subtitleTempPath)); err != nil {
-			log.Printf("Warning: failed to add subtitle option: %v", err)
+			slog.Warn("Failed to add subtitle option", "error", err)
 		} else {
-			log.Printf("Added subtitle file option: %s", subtitleTempPath)
+			slog.Debug("Added subtitle using vlc sub-file", "path", subtitleTempPath)
 		}
 	}
 
@@ -312,21 +314,19 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 	time.Sleep(100 * time.Millisecond)
 
 	if subtitle != nil && !subtitle.External {
-		p.EnableSubtitle(subtitle.Index)
+		if err := p.EnableSubtitle(subtitle.Index); err != nil {
+			slog.Warn("Failed to enable subtitle", "error", err)
+		}
 	}
 
 	// Report playback start to Jellyfin
 	if err := client.ReportPlaybackStart(itemID, 0); err != nil {
-		log.Printf("Warning: failed to report playback start: %v", err)
-	} else {
-		log.Println("Playback start reported to Jellyfin")
+		slog.Warn("Failed to report playback start", "error", err)
 	}
-
-	log.Println("Playing in fullscreen... Press Ctrl+C to stop")
 
 	// Wait for playback to finish
 	<-done
-	log.Println("Video playback completed")
+	slog.Info("Video playback completed")
 
 	// Get final position from state and report playback stopped
 	state := p.GetState()
@@ -334,13 +334,15 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 	finalPositionTicks := int64(finalPositionMs) * 10000
 
 	if err := client.ReportPlaybackStopped(itemID, finalPositionTicks); err != nil {
-		log.Printf("Warning: failed to report playback stopped: %v", err)
+		slog.Warn("Failed to report playback stopped", "error", err)
 	}
 
 	return nil
 }
 
 func playJellyfinVideoWithExternalSubtitle(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID string, client *jellyfin.Client, cfg *config.Config) error {
+	slog.Info("Burning external subtitles into video stream...")
+
 	subtitleTempPath := fmt.Sprintf("/tmp/%s.srt", itemID)
 	err := downloadSubtitle(*subtitle.URL, subtitleTempPath)
 	if err != nil {
@@ -349,7 +351,7 @@ func playJellyfinVideoWithExternalSubtitle(mediaURL string, subtitle *jellyfin.S
 
 	defer func() {
 		if err := os.Remove(subtitleTempPath); err != nil {
-			log.Printf("Warning: failed to remove subtitle file: %v", err)
+			slog.Warn("Failed to remove subtitle file", "error", err)
 		}
 	}()
 
@@ -382,7 +384,7 @@ func downloadSubtitle(url, path string) error {
 		return fmt.Errorf("failed to write subtitle file: %w", err)
 	}
 
-	log.Printf("Downloaded subtitle to: %s", path)
+	slog.Debug("Downloaded subtitle", "path", path)
 	return nil
 }
 
@@ -390,7 +392,7 @@ func startStreamWithBurnedSubtitles(inputURL, subtitleFile string, cfg *config.C
 	outputURL := "http://0.0.0.0:8090/stream"
 
 	go func() {
-		log.Printf("Starting ffmpeg stream: %s", outputURL)
+		slog.Debug("Starting ffmpeg stream", "url", outputURL)
 		err := ffmpeg.Input(inputURL, ffmpeg.KwArgs{"re": ""}).
 			Filter("subtitles", ffmpeg.Args{subtitleFile}).
 			Output(outputURL, ffmpeg.KwArgs{
@@ -407,7 +409,7 @@ func startStreamWithBurnedSubtitles(inputURL, subtitleFile string, cfg *config.C
 			Run()
 
 		if err != nil {
-			log.Printf("Error in ffmpeg stream: %v", err)
+			slog.Error("Error in ffmpeg stream", "error", err)
 		}
 	}()
 

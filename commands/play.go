@@ -2,8 +2,10 @@ package commands
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 
+	"jellyfin-vlc-shim/config"
+	"jellyfin-vlc-shim/logger"
 	"jellyfin-vlc-shim/player"
 
 	"github.com/spf13/cobra"
@@ -16,17 +18,38 @@ func NewPlayCmd(configDir *string) *cobra.Command {
 		Long:  "Play a local video file using libVLC. The file path must be an absolute or relative path to a video file.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return playVideo(args[0])
+			return playVideo(args[0], *configDir)
 		},
 	}
 
 	return cmd
 }
 
-func playVideo(path string) error {
+func playVideo(path string, configDir string) error {
+	// Get config directory and load configuration
+	dir, err := config.GetConfigDir(configDir)
+	if err != nil {
+		return fmt.Errorf("failed to get config directory: %w", err)
+	}
+
+	cfg, err := config.Load(dir)
+	if err != nil {
+		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+
+	// Initialize logger with configured log level
+	logger.Initialize(cfg.LogLevel)
+
 	// Create player with minimal VLC flags for local playback
+	vlcArgs := []string{}
+	if cfg.VLCDebug {
+		vlcArgs = append(vlcArgs, "--verbose=2")
+	} else {
+		vlcArgs = append(vlcArgs, "--quiet")
+	}
+
 	p, err := player.New(&player.Options{
-		VLCArgs: []string{"--verbose=2"},
+		VLCArgs: vlcArgs,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create player: %w", err)
@@ -53,7 +76,7 @@ func playVideo(path string) error {
 
 	// Wait for playback to finish
 	<-done
-	log.Println("Video playback completed")
+	slog.Info("Video playback completed")
 
 	return nil
 }

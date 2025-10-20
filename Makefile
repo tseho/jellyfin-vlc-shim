@@ -13,6 +13,7 @@ jellyfin-vlc-shim: config/config.go
 jellyfin-vlc-shim: jellyfin/auth.go
 jellyfin-vlc-shim: jellyfin/client.go
 jellyfin-vlc-shim: jellyfin/types.go
+jellyfin-vlc-shim: logger/logger.go
 jellyfin-vlc-shim: player/events.go
 jellyfin-vlc-shim: player/player.go
 jellyfin-vlc-shim:

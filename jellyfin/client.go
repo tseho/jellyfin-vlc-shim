@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -101,11 +101,13 @@ func (c *Client) GetSubtitleDownloadURL(itemID, mediaSourceID string, streamInde
 // GetSubtitleInfo returns information about the requested subtitle
 func (c *Client) GetSubtitleInfo(playData PlayCommandData, itemInfo *ItemInfo) *SubtitleInfo {
 	if playData.SubtitleStreamIndex == nil {
+		slog.Debug("Subtitle stream index is empty")
 		return nil
 	}
 
 	subtitleIndex := *playData.SubtitleStreamIndex
 	if subtitleIndex < 0 {
+		slog.Debug("Subtitle stream index is negative")
 		return nil
 	}
 
@@ -123,6 +125,7 @@ func (c *Client) GetSubtitleInfo(playData PlayCommandData, itemInfo *ItemInfo) *
 	}
 
 	if mediaSource == nil {
+		slog.Debug("Media source for subtitle not found")
 		return nil
 	}
 
@@ -142,6 +145,8 @@ func (c *Client) GetSubtitleInfo(playData PlayCommandData, itemInfo *ItemInfo) *
 			}
 		}
 	}
+
+	slog.Debug("Media stream for subtitle not found")
 
 	return nil
 }
@@ -229,6 +234,8 @@ func (c *Client) RegisterCapabilities() error {
 
 // ReportPlaybackStart reports playback start to the server
 func (c *Client) ReportPlaybackStart(itemID string, positionTicks int64) error {
+	slog.Debug("Notify jellyfin about playback start...")
+
 	data := map[string]interface{}{
 		"ItemId":        itemID,
 		"PositionTicks": positionTicks,
@@ -363,7 +370,7 @@ func (c *Client) ConnectWebSocket(ctx context.Context, handler MessageHandler) e
 
 	wsURL := fmt.Sprintf("%s://%s/socket?api_key=%s&device_id=%s", wsScheme, u.Host, c.AccessToken, c.DeviceID)
 
-	log.Printf("Connecting to WebSocket: %s", wsURL)
+	slog.Info("Connecting to WebSocket", "url", wsURL)
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -371,8 +378,8 @@ func (c *Client) ConnectWebSocket(ctx context.Context, handler MessageHandler) e
 	}
 	defer conn.Close()
 
-	log.Println("WebSocket connected successfully!")
-	log.Println("Listening for messages from Jellyfin server...")
+	slog.Info("WebSocket connected successfully!")
+	slog.Info("Listening for messages from Jellyfin server...")
 
 	done := make(chan struct{})
 
@@ -383,26 +390,19 @@ func (c *Client) ConnectWebSocket(ctx context.Context, handler MessageHandler) e
 			var msg WebSocketMessage
 			err := conn.ReadJSON(&msg)
 			if err != nil {
-				log.Printf("Error reading message: %v", err)
+				slog.Error("Error reading message", "error", err)
 				return
-			}
-
-			// Pretty print the message
-			jsonData, err := json.MarshalIndent(msg, "", "  ")
-			if err != nil {
-				log.Printf("Error marshaling message: %v", err)
-				continue
 			}
 
 			// Handle different message types
 			switch msg.MessageType {
 			case "ForceKeepAlive":
-				//log.Println("Sending KeepAlive response...")
+				//slog.Debug("Sending KeepAlive response...")
 				keepAlive := map[string]string{
 					"MessageType": "KeepAlive",
 				}
 				if err := conn.WriteJSON(keepAlive); err != nil {
-					log.Printf("Error sending keep-alive: %v", err)
+					slog.Error("Error sending keep-alive", "error", err)
 					return
 				}
 
@@ -420,10 +420,10 @@ func (c *Client) ConnectWebSocket(ctx context.Context, handler MessageHandler) e
 										"MessageType": "KeepAlive",
 									}
 									if err := conn.WriteJSON(keepAlive); err != nil {
-										log.Printf("Error sending periodic keep-alive: %v", err)
+										slog.Error("Error sending periodic keep-alive", "error", err)
 										return
 									}
-									log.Println("Sent periodic KeepAlive")
+									slog.Debug("Sent periodic KeepAlive")
 								case <-done:
 									return
 								}
@@ -435,10 +435,10 @@ func (c *Client) ConnectWebSocket(ctx context.Context, handler MessageHandler) e
 				continue
 
 			default:
-				log.Printf("Received message:\n%s\n", string(jsonData))
+				slog.Debug("Received message", "context", msg)
 				// Call the handler for other message types
 				if err := handler(msg); err != nil {
-					log.Printf("Error handling message: %v", err)
+					slog.Error("Error handling message", "error", err)
 				}
 			}
 		}
@@ -447,12 +447,12 @@ func (c *Client) ConnectWebSocket(ctx context.Context, handler MessageHandler) e
 	// Wait for either context cancellation or connection close
 	select {
 	case <-ctx.Done():
-		log.Println("Closing WebSocket...")
+		slog.Info("Closing WebSocket...")
 		// Send close message gracefully
 		err := conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 		if err != nil {
-			log.Printf("Error sending close message: %v", err)
+			slog.Warn("Error sending close message", "error", err)
 		}
 		return nil
 	case <-done:
