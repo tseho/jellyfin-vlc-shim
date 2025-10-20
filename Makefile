@@ -46,6 +46,11 @@ tests:
 	@killall jellyfin-vlc-shim > /dev/null 2>&1 || true
 	@killall -9 jellyfin-vlc-shim > /dev/null 2>&1 || true
 
+.PHONY: flush-test-databases
+flush-test-databases:
+	sqlite3 tests/jellyfin/config/data/jellyfin.db "PRAGMA wal_checkpoint(TRUNCATE);"
+	sqlite3 tests/jellyfin/config/data/library.db "PRAGMA wal_checkpoint(TRUNCATE);"
+
 .PHONY: sources
 sources: sources/jellyfin-mpv-shim
 sources: sources/jellyfin-apiclient-python
