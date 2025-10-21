@@ -75,6 +75,13 @@ type PlaystateCommandData struct {
 	ControllingUserId  string `json:"ControllingUserId,omitempty"`
 }
 
+// GeneralCommandData contains data for general commands
+type GeneralCommandData struct {
+	Name              string                 `json:"Name"`
+	ControllingUserId string                 `json:"ControllingUserId"`
+	Arguments         map[string]interface{} `json:"Arguments"`
+}
+
 // SubtitleInfo contains information about the selected subtitle
 type SubtitleInfo struct {
 	Index    int     `json:"index"`

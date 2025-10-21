@@ -134,6 +134,25 @@ func runClient(configDir string) error {
 			if err := handlePlaystateCommand(playstateData, client); err != nil {
 				slog.Error("Error handling playstate command", "error", err)
 			}
+
+		case "GeneralCommand":
+			slog.Debug("Received GeneralCommand")
+
+			// Parse the general command data
+			dataJSON, err := json.Marshal(msg.Data)
+			if err != nil {
+				return fmt.Errorf("error marshaling general command data: %w", err)
+			}
+
+			var generalData jellyfin.GeneralCommandData
+			if err := json.Unmarshal(dataJSON, &generalData); err != nil {
+				return fmt.Errorf("error parsing general command: %w", err)
+			}
+
+			// Handle the general command
+			if err := handleGeneralCommand(generalData, client); err != nil {
+				slog.Error("Error handling general command", "error", err)
+			}
 		}
 
 		return nil
@@ -239,6 +258,51 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 		}
 	default:
 		slog.Warn("Unknown playstate command", "command", command)
+	}
+
+	return nil
+}
+
+func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jellyfin.Client) error {
+	playerLock.Lock()
+	p := activePlayer
+	playerLock.Unlock()
+
+	if p == nil {
+		return fmt.Errorf("no active player")
+	}
+
+	command := generalData.Name
+	slog.Debug("Received General command", "command", command)
+
+	switch command {
+	case "SetSubtitleStreamIndex":
+		if indexValue, ok := generalData.Arguments["Index"]; ok {
+			// The index could be a string or a number
+			var subtitleIndex int
+			switch v := indexValue.(type) {
+			case string:
+				// Parse string to int
+				if _, err := fmt.Sscanf(v, "%d", &subtitleIndex); err != nil {
+					return fmt.Errorf("failed to parse subtitle index: %w", err)
+				}
+			case float64:
+				subtitleIndex = int(v)
+			case int:
+				subtitleIndex = v
+			default:
+				return fmt.Errorf("unexpected type for subtitle index: %T", indexValue)
+			}
+
+			slog.Info("Setting subtitle stream index", "index", subtitleIndex)
+			if err := p.EnableSubtitle(subtitleIndex); err != nil {
+				return fmt.Errorf("failed to enable subtitle: %w", err)
+			}
+		} else {
+			return fmt.Errorf("missing Index argument for SetSubtitleStreamIndex")
+		}
+	default:
+		slog.Warn("Unknown general command", "command", command)
 	}
 
 	return nil
