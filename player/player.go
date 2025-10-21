@@ -90,7 +90,9 @@ func New(opts *Options) (*Player, error) {
 
 // Release cleans up player resources
 func (p *Player) Release() {
-	p.player.Stop()
+	// Don't call Stop() here - if the window was closed manually,
+	// it will crash with GLXBadWindow. The player is already stopped
+	// when Release() is called from the defer.
 	p.player.Release()
 	vlc.Release()
 }

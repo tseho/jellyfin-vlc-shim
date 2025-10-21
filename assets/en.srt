@@ -1,0 +1,11 @@
+1
+00:00:01,000 --> 00:00:3,000
+The wild boars grunt.
+
+2
+00:00:03,000 --> 00:00:05,000
+The fledgling chirps.
+
+9
+00:00:06,250 --> 00:00:08,250
+The branch cracks.

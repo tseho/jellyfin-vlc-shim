@@ -10,18 +10,21 @@
 
 | Feature                                | Status |
 | -------------------------------------- | ------ |
-| Play video (MP4 x264)                  | ❔     |
-| Play video (MKV x264)                  | ❔     |
-| Play video (MP4 x265)                  | ✅     |
-| Play video (MKV x265)                  | ✅     |
-| Play video (MP4) + embedded `srt`      | ❔     |
-| Play video (MP4) + embedded `mov_text` | ❔     |
-| Play video (MKV) + embedded `srt`      | ⚠️     |
-| Play video (MKV) + embedded `ass`      | ❔     |
+| Play video x264                        | ✅     |
+| Play video x265                        | ✅     |
+| Play video with audio AAC              | ✅     |
+| Play video with audio AC-3             | ❔     |
+| Play video with audio E-AC-3           | ❔     |
+| Play video with audio DTS              | ❔     |
+| Play video (MP4) + embedded `mov_text` | ✅     |
+| Play video (MKV) + embedded `srt`      | ✅     |
+| Play video (MKV) + embedded `ass`      | ✅     |
 | Play video + external `srt`            | 🔴     |
+| Pause/Resume                           | ✅     |
 | Seek during play                       | ✅     |
 | Change audio track during play         | 🔴     |
 | Change subtitle track during play      | 🔴     |
+| Mirroring                              | 🔴     |
 
 **Legend:**
 
