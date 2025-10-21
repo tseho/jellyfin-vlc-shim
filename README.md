@@ -1,6 +1,12 @@
 # jellyfin-vlc-shim
 
-## Install
+Jellyfin VLC Shim is a cast client for Jellyfin, inspired by [jellyfin-mpv-shim](https://github.com/jellyfin/jellyfin-mpv-shim).
+It allows you to:
+
+- Direct play most media using VLC.
+- Be fully controlled by the Jellyfin mobile apps.
+
+## Getting started
 
 1. Download the [latest release](https://github.com/tseho/jellyfin-vlc-shim/releases)
 2. Authenticate on Jellyfin with `jellyfin-vlc-shim auth`
@@ -22,8 +28,8 @@
 | Play video + external `srt`            | 🔴     |
 | Pause/Resume                           | ✅     |
 | Seek during play                       | ✅     |
-| Change audio track during play         | 🔴     |
-| Change subtitle track during play      | 🔴     |
+| Change audio track during play         | ✅     |
+| Change subtitle track during play      | ✅     |
 | Mirroring                              | 🔴     |
 
 **Legend:**

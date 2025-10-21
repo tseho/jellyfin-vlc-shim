@@ -180,7 +180,7 @@ func (c *Client) RegisterCapabilities() error {
 			// "Unmute",
 			// "ToggleMute",
 			// "SetVolume",
-			// "SetAudioStreamIndex",
+			"SetAudioStreamIndex",
 			"SetSubtitleStreamIndex",
 			// "ToggleFullscreen",
 			"DisplayContent",

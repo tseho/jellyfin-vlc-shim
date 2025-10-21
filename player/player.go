@@ -236,6 +236,20 @@ func (p *Player) SeekTo(positionMs int64) error {
 	return nil
 }
 
+// EnableAudio enables the specified audio track by index
+func (p *Player) EnableAudio(index int) error {
+	slog.Debug("Enable audio track", "index", index)
+
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	if err := p.player.SetAudioTrack(index); err != nil {
+		return fmt.Errorf("failed to set audio track: %w", err)
+	}
+
+	return nil
+}
+
 // EnableSubtitles enables the first available subtitle track
 func (p *Player) EnableSubtitle(index int) error {
 	slog.Debug("Enable subtitle track", "index", index)

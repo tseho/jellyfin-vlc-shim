@@ -276,6 +276,31 @@ func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jelly
 	slog.Debug("Received General command", "command", command)
 
 	switch command {
+	case "SetAudioStreamIndex":
+		if indexValue, ok := generalData.Arguments["Index"]; ok {
+			// The index could be a string or a number
+			var audioIndex int
+			switch v := indexValue.(type) {
+			case string:
+				// Parse string to int
+				if _, err := fmt.Sscanf(v, "%d", &audioIndex); err != nil {
+					return fmt.Errorf("failed to parse audio index: %w", err)
+				}
+			case float64:
+				audioIndex = int(v)
+			case int:
+				audioIndex = v
+			default:
+				return fmt.Errorf("unexpected type for audio index: %T", indexValue)
+			}
+
+			slog.Info("Setting audio stream index", "index", audioIndex)
+			if err := p.EnableAudio(audioIndex); err != nil {
+				return fmt.Errorf("failed to enable audio: %w", err)
+			}
+		} else {
+			return fmt.Errorf("missing Index argument for SetAudioStreamIndex")
+		}
 	case "SetSubtitleStreamIndex":
 		if indexValue, ok := generalData.Arguments["Index"]; ok {
 			// The index could be a string or a number
