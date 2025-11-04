@@ -31,7 +31,7 @@ It allows you to:
 | Change audio track during play         | ✅     |
 | Change subtitle track during play      | ✅     |
 | Mirroring                              | 🔴     |
-| Screensaver                            | 🔴     |
+| Screensaver                            | ✅     |
 
 **Legend:**
 
@@ -48,3 +48,8 @@ Options can be set in `~/.config/jellyfin-vlc-shim/configuration.json`.
 - `fullscreen`: default: `true`
 - `jellyfin_device`: Client name show in jellyfin, default to hostname.
 - `jellyfin_client`: Client type shown in jellyfin, default: `jellyfin-vlc-shim`.
+
+## Troubleshooting
+
+- `The DISPLAY environment variable is missing`: On raspbian, you need to setup
+`DISPLAY=:0` & `XAUTHORITY=~/.Xauthority`.

@@ -10,6 +10,7 @@ tests:
 	./bin/jellyfin-vlc-shim --config .tmp/config auth --url http://localhost:8096 --username admin --password admin > /dev/null 2>&1
 	@yq -i '.jellyfin_device="tests"' .tmp/config/configuration.json
 	@yq -i '.fullscreen=false' .tmp/config/configuration.json
+	@yq -i '.screensaver=false' .tmp/config/configuration.json
 	@yq -i '.log_level="warn"' .tmp/config/configuration.json
 	./bin/jellyfin-vlc-shim --config .tmp/config > /dev/null 2>&1 &
 	(cd tests/playwright && npm run test)

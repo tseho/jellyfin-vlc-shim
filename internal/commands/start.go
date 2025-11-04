@@ -17,6 +17,7 @@ import (
 	"jellyfin-vlc-shim/internal/jellyfin"
 	"jellyfin-vlc-shim/internal/logger"
 	"jellyfin-vlc-shim/internal/player"
+	"jellyfin-vlc-shim/internal/screensaver"
 
 	"github.com/spf13/cobra"
 	ffmpeg "github.com/u2takey/ffmpeg-go"
@@ -24,9 +25,10 @@ import (
 
 var (
 	// Global player state for handling commands
-	activePlayer *player.Player
-	activeItemID string
-	playerLock   = &sync.Mutex{}
+	activePlayer      *player.Player
+	activeItemID      string
+	playerLock        = &sync.Mutex{}
+	activeScreensaver *screensaver.Screensaver
 )
 
 func NewStartCmd(configDir *string) *cobra.Command {
@@ -91,6 +93,18 @@ func runClient(configDir string) error {
 		return fmt.Errorf("failed to register capabilities: %w", err)
 	}
 	slog.Debug("Capabilities registered successfully!")
+
+	// Initialize and start screensaver if enabled
+	if cfg.Screensaver {
+		activeScreensaver = screensaver.New()
+
+		// Start screensaver in a separate goroutine
+		go func() {
+			if err := activeScreensaver.Start(); err != nil {
+				slog.Error("Failed to start screensaver", "error", err)
+			}
+		}()
+	}
 
 	// Connect to WebSocket and handle messages
 	return client.ConnectWebSocket(ctx, func(msg jellyfin.WebSocketMessage) error {
@@ -336,6 +350,11 @@ func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jelly
 }
 
 func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID string, client *jellyfin.Client, cfg *config.Config) error {
+	// Stop screensaver when playback starts
+	if activeScreensaver != nil && activeScreensaver.IsRunning() {
+		activeScreensaver.Stop()
+	}
+
 	vlcArgs := []string{}
 	if cfg.VLCDebug {
 		vlcArgs = append(vlcArgs, "--verbose=2")
@@ -361,6 +380,15 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 		p.Release()
 
 		os.Remove(subtitleTempPath)
+
+		// Restart screensaver after playback ends
+		if activeScreensaver != nil && !activeScreensaver.IsRunning() {
+			go func() {
+				if err := activeScreensaver.Start(); err != nil {
+					slog.Error("Failed to restart screensaver", "error", err)
+				}
+			}()
+		}
 	}()
 
 	// Set the global active player and playback context

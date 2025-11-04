@@ -3,7 +3,8 @@
   "permissions": {
     "allow": [
       "Bash(make build)",
-      "Bash(make build -B)"
+      "Bash(make build -B)",
+      "Bash(go mod tidy)"
     ]
   }
 }

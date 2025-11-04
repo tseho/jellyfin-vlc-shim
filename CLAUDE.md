@@ -12,7 +12,8 @@ This project is a Jellyfin cast client inspired by [jellyfin-mpv-shim](https://g
 │   ├── config/                # Configuration management
 │   ├── jellyfin/              # Jellyfin API client (auth, types, client)
 │   ├── logger/                # Logging utilities
-│   └── player/                # VLC player integration (player, events)
+│   ├── player/                # VLC player integration (player, events)
+│   └── screensaver/           # Screensaver with time display
 ├── tests/                     # E2E tests
 ├── sources/                   # Reference implementations
 └── bin/                       # Build output directory
@@ -41,11 +42,11 @@ This project is a Jellyfin cast client inspired by [jellyfin-mpv-shim](https://g
 - ✅ Change audio track during playback (`SetAudioStreamIndex`)
 - ✅ Change subtitle track during playback (`SetSubtitleStreamIndex`)
 - ✅ Support for multiple video/audio/subtitle formats
+- ✅ Screensaver
 
 ## Known Limitations
 - 🔴 External subtitle files (`.srt`) not yet supported
 - 🔴 Mirroring not supported
-- 🔴 Screensaver not supported
 
 # Commands
 

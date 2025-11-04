@@ -15,6 +15,7 @@ type Config struct {
 	JellyfinClient        string `json:"jellyfin_client"`
 	JellyfinDevice        string `json:"jellyfin_device"`
 	Fullscreen            bool   `json:"fullscreen"`
+	Screensaver           bool   `json:"screensaver"`
 	BurnExternalSubtitles bool   `json:"burn_external_subtitles"`
 	BurnEncoder           string `json:"burn_encoder"`
 	BurnSpeed             string `json:"burn_speed"`
@@ -45,6 +46,7 @@ func Load(configDir string) (*Config, error) {
 		JellyfinClient:        "jellyfin-vlc-shim",
 		JellyfinDevice:        hostname,
 		Fullscreen:            true,
+		Screensaver:           true,
 		BurnExternalSubtitles: false,
 		BurnEncoder:           "libx264",
 		BurnSpeed:             "ultrafast",
