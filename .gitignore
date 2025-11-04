@@ -1,5 +1,4 @@
-jellyfin-vlc-shim
-sources
+.claude/settings.local.json
 .tmp
-.config
 bin
+sources

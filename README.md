@@ -31,6 +31,7 @@ It allows you to:
 | Change audio track during play         | ✅     |
 | Change subtitle track during play      | ✅     |
 | Mirroring                              | 🔴     |
+| Screensaver                            | 🔴     |
 
 **Legend:**
 
