@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	"jellyfin-vlc-shim/config"
-	"jellyfin-vlc-shim/jellyfin"
-	"jellyfin-vlc-shim/logger"
-	"jellyfin-vlc-shim/player"
+	"jellyfin-vlc-shim/internal/config"
+	"jellyfin-vlc-shim/internal/jellyfin"
+	"jellyfin-vlc-shim/internal/logger"
+	"jellyfin-vlc-shim/internal/player"
 
 	"github.com/spf13/cobra"
 	ffmpeg "github.com/u2takey/ffmpeg-go"
@@ -268,15 +268,14 @@ func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jelly
 	p := activePlayer
 	playerLock.Unlock()
 
-	if p == nil {
-		return fmt.Errorf("no active player")
-	}
-
 	command := generalData.Name
 	slog.Debug("Received General command", "command", command)
 
 	switch command {
 	case "SetAudioStreamIndex":
+		if p == nil {
+			return fmt.Errorf("no active player")
+		}
 		if indexValue, ok := generalData.Arguments["Index"]; ok {
 			// The index could be a string or a number
 			var audioIndex int
@@ -302,6 +301,9 @@ func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jelly
 			return fmt.Errorf("missing Index argument for SetAudioStreamIndex")
 		}
 	case "SetSubtitleStreamIndex":
+		if p == nil {
+			return fmt.Errorf("no active player")
+		}
 		if indexValue, ok := generalData.Arguments["Index"]; ok {
 			// The index could be a string or a number
 			var subtitleIndex int

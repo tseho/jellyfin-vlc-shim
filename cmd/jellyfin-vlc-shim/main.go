@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"jellyfin-vlc-shim/commands"
+	"jellyfin-vlc-shim/internal/commands"
 
 	"github.com/spf13/cobra"
 )

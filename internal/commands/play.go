@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"log/slog"
 
-	"jellyfin-vlc-shim/config"
-	"jellyfin-vlc-shim/logger"
-	"jellyfin-vlc-shim/player"
+	"jellyfin-vlc-shim/internal/config"
+	"jellyfin-vlc-shim/internal/logger"
+	"jellyfin-vlc-shim/internal/player"
 
 	"github.com/spf13/cobra"
 )

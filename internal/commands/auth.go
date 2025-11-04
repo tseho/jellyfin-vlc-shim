@@ -8,19 +8,18 @@ import (
 	"strings"
 	"syscall"
 
-	"jellyfin-vlc-shim/config"
-	"jellyfin-vlc-shim/jellyfin"
-	"jellyfin-vlc-shim/logger"
+	"jellyfin-vlc-shim/internal/config"
+	"jellyfin-vlc-shim/internal/jellyfin"
+	"jellyfin-vlc-shim/internal/logger"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
 
 var (
-	serverURL  string
-	username   string
-	password   string
-	deviceName string
+	serverURL string
+	username  string
+	password  string
 )
 
 func NewAuthCmd(configDir *string) *cobra.Command {
@@ -36,7 +35,6 @@ func NewAuthCmd(configDir *string) *cobra.Command {
 	cmd.Flags().StringVar(&serverURL, "url", "", "Jellyfin server URL")
 	cmd.Flags().StringVar(&username, "username", "", "Jellyfin username")
 	cmd.Flags().StringVar(&password, "password", "", "Jellyfin password")
-	cmd.Flags().StringVar(&deviceName, "device-name", "", "Device name for Jellyfin (default: hostname)")
 
 	return cmd
 }
@@ -98,14 +96,6 @@ func authenticate(configDir string) error {
 
 	// Initialize logger with configured log level
 	logger.Initialize(cfg.LogLevel)
-
-	// Update device name if provided
-	if deviceName != "" {
-		cfg.JellyfinDevice = deviceName
-		if err := config.Save(dir, cfg); err != nil {
-			return fmt.Errorf("failed to save configuration with device name: %w", err)
-		}
-	}
 
 	// Authenticate with Jellyfin
 	authResult, err := jellyfin.Authenticate(inputURL, inputUsername, inputPassword, cfg.DeviceID, cfg.JellyfinClient, cfg.JellyfinDevice)

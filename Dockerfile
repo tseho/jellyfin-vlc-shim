@@ -9,11 +9,8 @@ ENV CGO_ENABLED=1
 
 WORKDIR /jellyfin-vlc-shim
 
-COPY go.mod go.sum main.go ./
-COPY commands commands
-COPY config config
-COPY jellyfin jellyfin
-COPY player player
-COPY logger logger
+COPY go.mod go.sum ./
+COPY cmd cmd
+COPY internal internal
 
-RUN go build -o jellyfin-vlc-shim
+RUN go build -o bin/jellyfin-vlc-shim cmd/jellyfin-vlc-shim/main.go
