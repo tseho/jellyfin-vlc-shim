@@ -35,14 +35,14 @@ jobs:
 
       - name: Build for Linux (amd64)
         run: |
-          make jellyfin-vlc-shim-linux-amd64
+          make bin/jellyfin-vlc-shim-linux-amd64
 
       - name: Build for Linux (arm64)
         env:
           CC: aarch64-linux-gnu-gcc
           PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
         run: |
-          make jellyfin-vlc-shim-linux-arm64
+          make bin/jellyfin-vlc-shim-linux-arm64
 
       - name: Extract version
         id: get_version
@@ -52,8 +52,8 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            jellyfin-vlc-shim-linux-amd64
-            jellyfin-vlc-shim-linux-arm64
+            bin/jellyfin-vlc-shim-linux-amd64
+            bin/jellyfin-vlc-shim-linux-arm64
           draft: false
           prerelease: true
           generate_release_notes: true
