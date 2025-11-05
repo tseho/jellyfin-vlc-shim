@@ -59,7 +59,6 @@ func (s *Screensaver) Stop() {
 	}
 
 	slog.Info("Stopping screensaver")
-	ebiten.SetCursorMode(ebiten.CursorModeVisible)
 	s.running = false
 }
 
@@ -77,6 +76,8 @@ type Game struct {
 
 // Update updates the game state
 func (g *Game) Update() error {
+	ebiten.SetCursorMode(ebiten.CursorModeHidden)
+
 	// Check if Escape key is pressed
 	if ebiten.IsKeyPressed(ebiten.KeyEscape) {
 		return ebiten.Termination
