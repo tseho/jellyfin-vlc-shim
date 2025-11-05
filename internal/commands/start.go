@@ -227,12 +227,27 @@ func UpdatePlaybackStatus(client *jellyfin.Client, player *player.Player) {
 	}
 }
 
+func StopPlayback(client *jellyfin.Client, player *player.Player) {
+	player.Stop()
+
+	itemID := activeItemID
+	state := player.GetState()
+	positionMs := state.GetCurrentPositionMs()
+	positionTicks := int64(positionMs) * 10000
+
+	if err := client.ReportPlaybackStopped(itemID, positionTicks); err != nil {
+		slog.Warn("Failed to report playback stopped", "error", err)
+	} else {
+		slog.Debug("Reported playback stopped", "itemID", itemID)
+	}
+}
+
 func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client *jellyfin.Client) error {
 	playerLock.Lock()
-	p := activePlayer
+	player := activePlayer
 	playerLock.Unlock()
 
-	if p == nil {
+	if player == nil {
 		return fmt.Errorf("no active player")
 	}
 
@@ -241,22 +256,22 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 
 	switch command {
 	case "Pause":
-		if err := p.Pause(); err != nil {
+		if err := player.Pause(); err != nil {
 			return fmt.Errorf("failed to pause: %w", err)
 		}
-		UpdatePlaybackStatus(client, p)
+		UpdatePlaybackStatus(client, player)
 	case "Unpause":
-		if err := p.Unpause(); err != nil {
+		if err := player.Unpause(); err != nil {
 			return fmt.Errorf("failed to unpause: %w", err)
 		}
-		UpdatePlaybackStatus(client, p)
+		UpdatePlaybackStatus(client, player)
 	case "PlayPause":
-		if err := p.TogglePause(); err != nil {
+		if err := player.TogglePause(); err != nil {
 			return fmt.Errorf("failed to toggle pause: %w", err)
 		}
-		UpdatePlaybackStatus(client, p)
+		UpdatePlaybackStatus(client, player)
 	case "Stop":
-		p.Stop()
+		StopPlayback(client, player)
 	case "NextTrack":
 		slog.Info("NextTrack not yet implemented")
 	case "PreviousTrack":
@@ -265,10 +280,10 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 		if playstateData.SeekPositionTicks > 0 {
 			// Convert ticks to milliseconds (1 tick = 100 nanoseconds)
 			seekTimeMs := playstateData.SeekPositionTicks / 10000
-			if err := p.SeekTo(seekTimeMs); err != nil {
+			if err := player.SeekTo(seekTimeMs); err != nil {
 				return fmt.Errorf("failed to seek: %w", err)
 			}
-			UpdatePlaybackStatus(client, p)
+			UpdatePlaybackStatus(client, player)
 		}
 	default:
 		slog.Warn("Unknown playstate command", "command", command)

@@ -158,6 +158,8 @@ func (p *Player) Stop() {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
+	p.state.IsPaused = true
+	p.state.PausedAt = time.Now()
 	p.player.Stop()
 	slog.Info("Player stopped")
 }
