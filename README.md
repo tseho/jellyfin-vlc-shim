@@ -46,6 +46,7 @@ Options can be set in `~/.config/jellyfin-vlc-shim/configuration.json`.
 
 - `log_level`: `debug|info|warn|error`, default: `info`.
 - `fullscreen`: default: `true`
+- `screensaver`: default: `true`
 - `jellyfin_device`: Client name show in jellyfin, default to hostname.
 - `jellyfin_client`: Client type shown in jellyfin, default: `jellyfin-vlc-shim`.
 
