@@ -65,3 +65,4 @@ Local source code for inspiration and reference:
 - `sources/jellyfin-mpv-shim` - MPV Cast Client for Jellyfin (Python)
 - `sources/jellyfin-apiclient-python` - Python API Client for Jellyfin
 - `sources/libvlc-go` - Go bindings for libVLC (v2 and v3)
+- `sources/ebiten` - Ebiten source code

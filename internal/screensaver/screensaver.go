@@ -41,8 +41,13 @@ func (s *Screensaver) Start() error {
 	ebiten.SetFullscreen(true)
 	ebiten.SetWindowTitle("Jellyfin VLC Shim")
 	ebiten.SetCursorMode(ebiten.CursorModeHidden)
+	ebiten.SetTPS(1)                         // Only update once per second to save CPU (there is an additional sleep in Update)
+	ebiten.SetVsyncEnabled(false)            // Disable VSync to save CPU
+	ebiten.SetScreenClearedEveryFrame(false) // Don't clear screen every frame to save CPU
 
-	game := &Game{}
+	game := &Game{
+		needsRedraw: true,
+	}
 
 	if err := ebiten.RunGame(game); err != nil {
 		s.running = false
@@ -70,28 +75,40 @@ func (s *Screensaver) IsRunning() bool {
 // Game implements ebiten.Game interface
 type Game struct {
 	faceSource   *text.GoTextFaceSource
+	face         *text.GoTextFace
 	screenWidth  int
 	screenHeight int
+	time         string
+	needsRedraw  bool
 }
 
 // Update updates the game state
 func (g *Game) Update() error {
 	ebiten.SetCursorMode(ebiten.CursorModeHidden)
 
-	// Check if Escape key is pressed
-	if ebiten.IsKeyPressed(ebiten.KeyEscape) {
-		return ebiten.Termination
+	// Check if time has changed
+	currentTime := time.Now().Format("15:04")
+	if currentTime != g.time {
+		g.time = currentTime
+		g.needsRedraw = true
 	}
+
+	// Sleep a bit to reduce CPU usage
+	if !g.needsRedraw {
+		time.Sleep(time.Second * 5)
+	}
+
 	return nil
 }
 
 // Draw draws the screensaver
 func (g *Game) Draw(screen *ebiten.Image) {
-	// Fill screen with black
-	screen.Fill(color.Black)
+	// Only redraw text if time has changed
+	if !g.needsRedraw {
+		return
+	}
 
-	// Get current time in 24h format
-	currentTime := time.Now().Format("15:04")
+	screen.Fill(color.Black)
 
 	// Initialize font if needed (use Go's built-in font)
 	if g.faceSource == nil {
@@ -103,14 +120,16 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		g.faceSource = s
 	}
 
-	// Create face with large size for visibility
-	face := &text.GoTextFace{
-		Source: g.faceSource,
-		Size:   fontSize,
+	// Create face once and cache it
+	if g.face == nil {
+		g.face = &text.GoTextFace{
+			Source: g.faceSource,
+			Size:   fontSize,
+		}
 	}
 
 	// Calculate text dimensions
-	textWidth, textHeight := text.Measure(currentTime, face, 0)
+	textWidth, textHeight := text.Measure(g.time, g.face, 0)
 
 	// Position text at bottom right with padding
 	x := float64(g.screenWidth) - textWidth - padding
@@ -120,7 +139,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	textOp := &text.DrawOptions{}
 	textOp.GeoM.Translate(x, y)
 	textOp.ColorScale.ScaleWithColor(color.White)
-	text.Draw(screen, currentTime, face, textOp)
+	text.Draw(screen, g.time, g.face, textOp)
+
+	g.needsRedraw = false
 }
 
 // Layout returns the game's logical screen size

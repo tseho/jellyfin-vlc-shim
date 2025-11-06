@@ -2,6 +2,7 @@
 sources: sources/jellyfin-mpv-shim
 sources: sources/jellyfin-apiclient-python
 sources: sources/libvlc-go
+sources: sources/ebiten
 
 sources/jellyfin-mpv-shim:
 	git clone https://github.com/jellyfin/jellyfin-mpv-shim.git sources/jellyfin-mpv-shim
@@ -14,3 +15,7 @@ sources/jellyfin-apiclient-python:
 sources/libvlc-go:
 	git clone https://github.com/adrg/libvlc-go.git sources/libvlc-go
 	rm -rf sources/libvlc-go/.git
+
+sources/ebiten:
+	git clone git@github.com:hajimehoshi/ebiten.git sources/ebiten
+	rm -rf sources/ebiten/.git
