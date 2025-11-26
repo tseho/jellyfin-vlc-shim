@@ -25,10 +25,12 @@ import (
 
 var (
 	// Global player state for handling commands
-	activePlayer      *player.Player
-	activeItemID      string
-	playerLock        = &sync.Mutex{}
-	activeScreensaver *screensaver.Screensaver
+	activePlayer        *player.Player
+	activeItemID        string
+	activeItemInfo      *jellyfin.ItemInfo
+	activeMediaSourceId string
+	playerLock          = &sync.Mutex{}
+	activeScreensaver   *screensaver.Screensaver
 )
 
 func NewStartCmd(configDir *string) *cobra.Command {
@@ -167,6 +169,14 @@ func runClient(configDir string) error {
 			if err := handleGeneralCommand(generalData, client); err != nil {
 				slog.Error("Error handling general command", "error", err)
 			}
+
+		default:
+			dataJSON, err := json.Marshal(msg.Data)
+			if err != nil {
+				return fmt.Errorf("error marshaling data: %w", err)
+			}
+
+			slog.Debug("Received event", "type", msg.MessageType, "data", string(dataJSON))
 		}
 
 		return nil
@@ -192,8 +202,18 @@ func handlePlayCommand(playData jellyfin.PlayCommandData, client *jellyfin.Clien
 	slog.Debug("Play data", "context", playData)
 	slog.Debug("Item info", "context", itemInfo)
 
+	// Store item info and media source ID for later use
+	activeItemInfo = itemInfo
+	if playData.MediaSourceId != "" {
+		activeMediaSourceId = playData.MediaSourceId
+	} else if len(itemInfo.MediaSources) > 0 {
+		activeMediaSourceId = itemInfo.MediaSources[0].Id
+	}
+
+	slog.Debug("Media source", "id", activeMediaSourceId)
+
 	// Get the direct stream URL
-	videoStreamURL := client.GetVideoDirectStreamURL(itemID)
+	videoStreamURL := client.GetVideoDirectStreamURL(activeMediaSourceId)
 	slog.Debug("Video URL", "url", videoStreamURL)
 
 	// Get subtitle
@@ -277,14 +297,23 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 	case "PreviousTrack":
 		slog.Info("PreviousTrack not yet implemented")
 	case "Seek":
+		if player.GetState().IsPaused {
+			slog.Warn("Seek during pause is not supported")
+			return nil
+		}
+		if playstateData.SeekPositionTicks == 0 {
+			if err := player.SeekTo(0); err != nil {
+				return fmt.Errorf("failed to seek: %w", err)
+			}
+		}
 		if playstateData.SeekPositionTicks > 0 {
 			// Convert ticks to milliseconds (1 tick = 100 nanoseconds)
 			seekTimeMs := playstateData.SeekPositionTicks / 10000
 			if err := player.SeekTo(seekTimeMs); err != nil {
 				return fmt.Errorf("failed to seek: %w", err)
 			}
-			UpdatePlaybackStatus(client, player)
 		}
+		UpdatePlaybackStatus(client, player)
 	default:
 		slog.Warn("Unknown playstate command", "command", command)
 	}
@@ -335,22 +364,28 @@ func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jelly
 		}
 		if indexValue, ok := generalData.Arguments["Index"]; ok {
 			// The index could be a string or a number
-			var subtitleIndex int
+			var streamSubtitleIndex int
 			switch v := indexValue.(type) {
 			case string:
 				// Parse string to int
-				if _, err := fmt.Sscanf(v, "%d", &subtitleIndex); err != nil {
+				if _, err := fmt.Sscanf(v, "%d", &streamSubtitleIndex); err != nil {
 					return fmt.Errorf("failed to parse subtitle index: %w", err)
 				}
 			case float64:
-				subtitleIndex = int(v)
+				streamSubtitleIndex = int(v)
 			case int:
-				subtitleIndex = v
+				streamSubtitleIndex = v
 			default:
 				return fmt.Errorf("unexpected type for subtitle index: %T", indexValue)
 			}
 
-			slog.Info("Setting subtitle stream index", "index", subtitleIndex)
+			// Convert Jellyfin subtitle index to VLC subtitle index
+			subtitleIndex, err := client.GetSubtitleIndexInStreamSubtitles(streamSubtitleIndex, activeMediaSourceId, activeItemInfo)
+			if err != nil {
+				return fmt.Errorf("failed to convert subtitle index: %w", err)
+			}
+
+			slog.Info("Setting subtitle stream", "jellyfinIndex", streamSubtitleIndex, "vlcIndex", subtitleIndex)
 			if err := p.EnableSubtitle(subtitleIndex); err != nil {
 				return fmt.Errorf("failed to enable subtitle: %w", err)
 			}
@@ -368,6 +403,16 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 	// Stop screensaver when playback starts
 	if activeScreensaver != nil && activeScreensaver.IsRunning() {
 		activeScreensaver.Stop()
+	}
+
+	// Stop any existing player
+	if activePlayer != nil {
+		playerLock.Lock()
+		StopPlayback(client, activePlayer)
+		activePlayer.Release()
+		activePlayer = nil
+		activeItemID = ""
+		playerLock.Unlock()
 	}
 
 	vlcArgs := []string{}
@@ -448,7 +493,12 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 	time.Sleep(100 * time.Millisecond)
 
 	if subtitle != nil && !subtitle.External {
-		if err := p.EnableSubtitle(subtitle.Index); err != nil {
+		// Convert Jellyfin subtitle index to VLC subtitle index
+		subtitleIndex, err := client.GetSubtitleIndexInStreamSubtitles(subtitle.Index, activeMediaSourceId, activeItemInfo)
+		if err != nil {
+			slog.Warn("Failed to convert subtitle index", "error", err)
+		}
+		if err := p.EnableSubtitle(subtitleIndex); err != nil {
 			slog.Warn("Failed to enable subtitle", "error", err)
 		}
 	}

@@ -61,18 +61,18 @@ type WebSocketMessage struct {
 
 // PlayCommandData contains data for a Play command
 type PlayCommandData struct {
-	ControllingUserId    string   `json:"ControllingUserId"`
-	ItemIds              []string `json:"ItemIds"`
-	PlayCommand          string   `json:"PlayCommand"`
-	MediaSourceId        string   `json:"MediaSourceId,omitempty"`
-	SubtitleStreamIndex  *int     `json:"SubtitleStreamIndex,omitempty"`
+	ControllingUserId   string   `json:"ControllingUserId"`
+	ItemIds             []string `json:"ItemIds"`
+	PlayCommand         string   `json:"PlayCommand"`
+	MediaSourceId       string   `json:"MediaSourceId,omitempty"`
+	SubtitleStreamIndex *int     `json:"SubtitleStreamIndex,omitempty"`
 }
 
 // PlaystateCommandData contains data for playstate commands
 type PlaystateCommandData struct {
-	Command            string `json:"Command"`
-	SeekPositionTicks  int64  `json:"SeekPositionTicks,omitempty"`
-	ControllingUserId  string `json:"ControllingUserId,omitempty"`
+	Command           string `json:"Command"`
+	SeekPositionTicks int64  `json:"SeekPositionTicks,omitempty"`
+	ControllingUserId string `json:"ControllingUserId,omitempty"`
 }
 
 // GeneralCommandData contains data for general commands

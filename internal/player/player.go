@@ -252,14 +252,52 @@ func (p *Player) EnableAudio(index int) error {
 	return nil
 }
 
-// EnableSubtitles enables the first available subtitle track
+// EnableSubtitle enables the specified subtitle track
 func (p *Player) EnableSubtitle(index int) error {
 	slog.Debug("Enable subtitle track", "index", index)
 
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
-	if err := p.player.SetSubtitleTrack(index); err != nil {
+	// Wait for subtitle tracks to be discovered with exponential backoff
+	maxRetries := 10
+	retryDelay := 100 * time.Millisecond
+	for attempt := range maxRetries {
+		slog.Debug("Checking subtitle tracks...", "attempt", attempt)
+
+		count, err := p.player.SubtitleTrackCount()
+		if err != nil || count == 0 {
+			p.lock.Unlock()
+			time.Sleep(retryDelay)
+			p.lock.Lock()
+			retryDelay *= 2
+		}
+		if count > 0 {
+			break
+		}
+	}
+
+	// Get subtitle track descriptors
+	tracks, err := p.player.SubtitleTrackDescriptors()
+	if err != nil {
+		return fmt.Errorf("failed to get subtitle tracks: %w", err)
+	}
+	tracksJSON, _ := json.Marshal(tracks)
+	slog.Debug("Available subtitle tracks", "tracks", string(tracksJSON))
+
+	trackId := -1
+	trackIndex := 0
+	for _, track := range tracks {
+		if track.ID != -1 {
+			trackIndex++
+			if trackIndex == index {
+				trackId = track.ID
+				slog.Debug("Selected subtitle track", "track", track)
+			}
+		}
+	}
+
+	if err := p.player.SetSubtitleTrack(trackId); err != nil {
 		return fmt.Errorf("failed to set subtitle track: %w", err)
 	}
 

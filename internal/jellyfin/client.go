@@ -98,6 +98,44 @@ func (c *Client) GetSubtitleDownloadURL(itemID, mediaSourceID string, streamInde
 		c.ServerURL, itemID, mediaSourceID, streamIndex, c.DeviceID, c.AccessToken)
 }
 
+// GetSubtitleIndexInStreamSubtitles converts a Jellyfin subtitle stream index to an index, starting from 1,
+// of the stream in the list of subtitles
+func (c *Client) GetSubtitleIndexInStreamSubtitles(index int, mediaSourceId string, itemInfo *ItemInfo) (int, error) {
+	if itemInfo == nil {
+		return -1, fmt.Errorf("item info is nil")
+	}
+
+	// Find the media source
+	var mediaSource *MediaSource
+	if mediaSourceId != "" {
+		for i := range itemInfo.MediaSources {
+			if itemInfo.MediaSources[i].Id == mediaSourceId {
+				mediaSource = &itemInfo.MediaSources[i]
+				break
+			}
+		}
+	} else if len(itemInfo.MediaSources) > 0 {
+		mediaSource = &itemInfo.MediaSources[0]
+	}
+
+	if mediaSource == nil {
+		return -1, fmt.Errorf("media source not found")
+	}
+
+	// Find the subtitle stream and count subtitles before it
+	actualIndex := 0
+	for _, stream := range mediaSource.MediaStreams {
+		if stream.Type == "Subtitle" && !stream.IsExternal {
+			actualIndex++
+			if stream.Index == index {
+				return actualIndex, nil
+			}
+		}
+	}
+
+	return -1, fmt.Errorf("subtitle stream with index %d not found", index)
+}
+
 // GetSubtitleInfo returns information about the requested subtitle
 func (c *Client) GetSubtitleInfo(playData PlayCommandData, itemInfo *ItemInfo) *SubtitleInfo {
 	if playData.SubtitleStreamIndex == nil {
@@ -131,17 +169,19 @@ func (c *Client) GetSubtitleInfo(playData PlayCommandData, itemInfo *ItemInfo) *
 
 	// Find the subtitle stream
 	for _, stream := range mediaSource.MediaStreams {
-		if stream.Type == "Subtitle" && stream.Index == subtitleIndex {
-			var url *string
-			if stream.IsExternal {
-				urlStr := c.GetSubtitleDownloadURL(itemInfo.Id, mediaSource.Id, stream.Index)
-				url = &urlStr
-			}
+		if stream.Type == "Subtitle" {
+			if stream.Index == subtitleIndex {
+				var url *string
+				if stream.IsExternal {
+					urlStr := c.GetSubtitleDownloadURL(itemInfo.Id, mediaSource.Id, stream.Index)
+					url = &urlStr
+				}
 
-			return &SubtitleInfo{
-				Index:    stream.Index,
-				External: stream.IsExternal,
-				URL:      url,
+				return &SubtitleInfo{
+					Index:    stream.Index,
+					External: stream.IsExternal,
+					URL:      url,
+				}
 			}
 		}
 	}
