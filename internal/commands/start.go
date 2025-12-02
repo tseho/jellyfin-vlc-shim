@@ -25,12 +25,14 @@ import (
 
 var (
 	// Global player state for handling commands
-	activePlayer        *player.Player
-	activeItemID        string
-	activeItemInfo      *jellyfin.ItemInfo
-	activeMediaSourceId string
-	playerLock          = &sync.Mutex{}
-	activeScreensaver   *screensaver.Screensaver
+	activePlayer              *player.Player
+	activeItemID              string
+	activeItemInfo            *jellyfin.ItemInfo
+	activeMediaSourceId       string
+	activeAudioStreamIndex    *int64
+	activeSubtitleStreamIndex *int64
+	playerLock                = &sync.Mutex{}
+	activeScreensaver         *screensaver.Screensaver
 )
 
 func NewStartCmd(configDir *string) *cobra.Command {
@@ -212,14 +214,36 @@ func handlePlayCommand(playData jellyfin.PlayCommandData, client *jellyfin.Clien
 
 	slog.Debug("Media source", "id", activeMediaSourceId)
 
+	// Get audio info
+	audio := client.GetAudioInfo(playData, itemInfo)
+	if audio != nil {
+		idx := int64(audio.Index)
+		activeAudioStreamIndex = &idx
+		slog.Debug("Audio info", "context", audio)
+	} else {
+		activeAudioStreamIndex = nil
+	}
+
+	// Get subtitle info
+	subtitle := client.GetSubtitleInfo(playData, itemInfo)
+	if subtitle != nil {
+		idx := int64(subtitle.Index)
+		activeSubtitleStreamIndex = &idx
+		slog.Debug("Subtitle info", "context", subtitle)
+	} else {
+		activeSubtitleStreamIndex = nil
+	}
+
 	// Get the direct stream URL
 	videoStreamURL := client.GetVideoDirectStreamURL(activeMediaSourceId)
 	slog.Debug("Video URL", "url", videoStreamURL)
 
-	// Get subtitle
-	subtitle := client.GetSubtitleInfo(playData, itemInfo)
-	if subtitle != nil {
-		slog.Debug("Subtitle info", "context", subtitle)
+	// Get start position from playData
+	var startPositionMs int64 = 0
+	if playData.StartPositionTicks != nil && *playData.StartPositionTicks > 0 {
+		// Convert ticks to milliseconds (1 tick = 100 nanoseconds)
+		startPositionMs = int64(*playData.StartPositionTicks) / 10000
+		slog.Debug("Starting playback from position", "startPositionMs", startPositionMs, "startPositionTicks", *playData.StartPositionTicks)
 	}
 
 	if !cfg.BurnExternalSubtitles {
@@ -228,10 +252,10 @@ func handlePlayCommand(playData jellyfin.PlayCommandData, client *jellyfin.Clien
 
 	// Burn external subtitles if enabled (slow and CPU intensive)
 	if cfg.BurnExternalSubtitles && subtitle != nil && subtitle.External {
-		return playJellyfinVideoWithExternalSubtitle(videoStreamURL, subtitle, itemID, client, cfg)
+		return playJellyfinVideoWithExternalSubtitle(videoStreamURL, subtitle, itemID, client, cfg, startPositionMs)
 	}
 
-	return playJellyfinVideo(videoStreamURL, subtitle, itemID, client, cfg)
+	return playJellyfinVideo(videoStreamURL, subtitle, itemID, client, cfg, startPositionMs)
 }
 
 func UpdatePlaybackStatus(client *jellyfin.Client, player *player.Player) {
@@ -240,7 +264,7 @@ func UpdatePlaybackStatus(client *jellyfin.Client, player *player.Player) {
 	positionMs := state.GetCurrentPositionMs()
 	positionTicks := int64(positionMs) * 10000
 
-	if err := client.ReportPlaybackProgress(itemID, positionTicks, state.IsPaused); err != nil {
+	if err := client.ReportPlaybackProgress(itemID, activeMediaSourceId, activeAudioStreamIndex, activeSubtitleStreamIndex, positionTicks, state.IsPaused); err != nil {
 		slog.Warn("Failed to report playback progress", "error", err)
 	} else {
 		slog.Debug("Reported playback progress", "paused", state.IsPaused, "positionMs", positionMs)
@@ -399,7 +423,7 @@ func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jelly
 	return nil
 }
 
-func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID string, client *jellyfin.Client, cfg *config.Config) error {
+func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID string, client *jellyfin.Client, cfg *config.Config, startPositionMs int64) error {
 	// Stop screensaver when playback starts
 	if activeScreensaver != nil && activeScreensaver.IsRunning() {
 		activeScreensaver.Stop()
@@ -492,6 +516,14 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 	// Wait a bit for the player to actually start playing
 	time.Sleep(100 * time.Millisecond)
 
+	// Seek to start position if specified
+	if startPositionMs > 0 {
+		slog.Debug("Seeking to start position", "positionMs", startPositionMs)
+		if err := p.SeekTo(startPositionMs); err != nil {
+			slog.Warn("Failed to seek to start position", "error", err, "positionMs", startPositionMs)
+		}
+	}
+
 	if subtitle != nil && !subtitle.External {
 		// Convert Jellyfin subtitle index to VLC subtitle index
 		subtitleIndex, err := client.GetSubtitleIndexInStreamSubtitles(subtitle.Index, activeMediaSourceId, activeItemInfo)
@@ -503,8 +535,9 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 		}
 	}
 
-	// Report playback start to Jellyfin
-	if err := client.ReportPlaybackStart(itemID, 0); err != nil {
+	// Report playback start to Jellyfin with the actual start position
+	startPositionTicks := startPositionMs * 10000
+	if err := client.ReportPlaybackStart(itemID, activeMediaSourceId, activeAudioStreamIndex, activeSubtitleStreamIndex, startPositionTicks); err != nil {
 		slog.Warn("Failed to report playback start", "error", err)
 	}
 
@@ -524,7 +557,7 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 	return nil
 }
 
-func playJellyfinVideoWithExternalSubtitle(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID string, client *jellyfin.Client, cfg *config.Config) error {
+func playJellyfinVideoWithExternalSubtitle(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID string, client *jellyfin.Client, cfg *config.Config, startPositionMs int64) error {
 	slog.Info("Burning external subtitles into video stream...")
 
 	subtitleTempPath := fmt.Sprintf("/tmp/%s.srt", itemID)
@@ -544,7 +577,7 @@ func playJellyfinVideoWithExternalSubtitle(mediaURL string, subtitle *jellyfin.S
 		return fmt.Errorf("failed to start stream with burned subtitles: %w", err)
 	}
 
-	return playJellyfinVideo(streamURL, nil, itemID, client, cfg)
+	return playJellyfinVideo(streamURL, nil, itemID, client, cfg, startPositionMs)
 }
 
 func downloadSubtitle(url, path string) error {

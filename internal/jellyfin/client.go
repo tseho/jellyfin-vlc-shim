@@ -136,6 +136,51 @@ func (c *Client) GetSubtitleIndexInStreamSubtitles(index int, mediaSourceId stri
 	return -1, fmt.Errorf("subtitle stream with index %d not found", index)
 }
 
+// GetAudioInfo returns information about the audio stream
+func (c *Client) GetAudioInfo(playData PlayCommandData, itemInfo *ItemInfo) *AudioInfo {
+	// Find the media source
+	var mediaSource *MediaSource
+	if playData.MediaSourceId != "" {
+		for i := range itemInfo.MediaSources {
+			if itemInfo.MediaSources[i].Id == playData.MediaSourceId {
+				mediaSource = &itemInfo.MediaSources[i]
+				break
+			}
+		}
+	} else if len(itemInfo.MediaSources) > 0 {
+		mediaSource = &itemInfo.MediaSources[0]
+	}
+
+	if mediaSource == nil {
+		slog.Debug("Media source for audio not found")
+		return nil
+	}
+
+	// If AudioStreamIndex is specified in playData, use that
+	if playData.AudioStreamIndex != nil {
+		audioIndex := *playData.AudioStreamIndex
+		for _, stream := range mediaSource.MediaStreams {
+			if stream.Type == "Audio" && stream.Index == audioIndex {
+				return &AudioInfo{
+					Index: stream.Index,
+				}
+			}
+		}
+	}
+
+	// Otherwise, find the first audio stream
+	for _, stream := range mediaSource.MediaStreams {
+		if stream.Type == "Audio" {
+			return &AudioInfo{
+				Index: stream.Index,
+			}
+		}
+	}
+
+	slog.Debug("No audio stream found")
+	return nil
+}
+
 // GetSubtitleInfo returns information about the requested subtitle
 func (c *Client) GetSubtitleInfo(playData PlayCommandData, itemInfo *ItemInfo) *SubtitleInfo {
 	if playData.SubtitleStreamIndex == nil {
@@ -273,17 +318,21 @@ func (c *Client) RegisterCapabilities() error {
 }
 
 // ReportPlaybackStart reports playback start to the server
-func (c *Client) ReportPlaybackStart(itemID string, positionTicks int64) error {
+func (c *Client) ReportPlaybackStart(itemID string, mediaSourceId string, audioStreamIndex *int64, subtitleStreamIndex *int64, positionTicks int64) error {
 	slog.Debug("Notify jellyfin about playback start...")
 
 	data := map[string]interface{}{
-		"ItemId":        itemID,
-		"PositionTicks": positionTicks,
-		"IsPaused":      false,
-		"IsMuted":       false,
-		"VolumeLevel":   100,
-		"PlayMethod":    "DirectPlay",
-		"CanSeek":       true,
+		"ItemId":              itemID,
+		"MediaSourceId":       mediaSourceId,
+		"AudioStreamIndex":    audioStreamIndex,
+		"SubtitleStreamIndex": subtitleStreamIndex,
+		"IsPaused":            false,
+		"IsMuted":             false,
+		"PositionTicks":       positionTicks,
+		"PlayMethod":          "DirectPlay",
+		"CanSeek":             true,
+		"Brightness":          100,
+		"VolumeLevel":         100,
 	}
 
 	jsonData, err := json.Marshal(data)
@@ -316,15 +365,19 @@ func (c *Client) ReportPlaybackStart(itemID string, positionTicks int64) error {
 }
 
 // ReportPlaybackProgress reports playback progress to the server
-func (c *Client) ReportPlaybackProgress(itemID string, positionTicks int64, isPaused bool) error {
+func (c *Client) ReportPlaybackProgress(itemID string, mediaSourceId string, audioStreamIndex *int64, subtitleStreamIndex *int64, positionTicks int64, isPaused bool) error {
 	data := map[string]interface{}{
-		"ItemId":        itemID,
-		"PositionTicks": positionTicks,
-		"IsPaused":      isPaused,
-		"IsMuted":       false,
-		"VolumeLevel":   100,
-		"PlayMethod":    "DirectPlay",
-		"CanSeek":       true,
+		"ItemId":              itemID,
+		"MediaSourceId":       mediaSourceId,
+		"AudioStreamIndex":    audioStreamIndex,
+		"SubtitleStreamIndex": subtitleStreamIndex,
+		"IsPaused":            isPaused,
+		"IsMuted":             false,
+		"PositionTicks":       positionTicks,
+		"PlayMethod":          "DirectPlay",
+		"CanSeek":             true,
+		"Brightness":          100,
+		"VolumeLevel":         100,
 	}
 
 	jsonData, err := json.Marshal(data)

@@ -7,7 +7,8 @@ tests:
 	@killall -9 jellyfin-vlc-shim > /dev/null 2>&1 || true
 	@rm -rf .tmp
 	@mkdir -p .tmp
-	./bin/jellyfin-vlc-shim --config .tmp/config auth --url http://localhost:8096 --username admin --password admin > /dev/null 2>&1
+	@until nc -z 127.0.0.1 8096; do sleep 1; done
+	./bin/jellyfin-vlc-shim --config .tmp/config auth --url http://localhost:8096 --username admin --password admin 2>&1
 	@yq -i '.jellyfin_device="tests"' .tmp/config/configuration.json
 	@yq -i '.fullscreen=false' .tmp/config/configuration.json
 	@yq -i '.screensaver=false' .tmp/config/configuration.json

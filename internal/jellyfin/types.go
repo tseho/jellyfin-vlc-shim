@@ -65,7 +65,9 @@ type PlayCommandData struct {
 	ItemIds             []string `json:"ItemIds"`
 	PlayCommand         string   `json:"PlayCommand"`
 	MediaSourceId       string   `json:"MediaSourceId,omitempty"`
+	AudioStreamIndex    *int     `json:"AudioStreamIndex,omitempty"`
 	SubtitleStreamIndex *int     `json:"SubtitleStreamIndex,omitempty"`
+	StartPositionTicks  *int     `json:"StartPositionTicks,omitempty"`
 }
 
 // PlaystateCommandData contains data for playstate commands
@@ -80,6 +82,11 @@ type GeneralCommandData struct {
 	Name              string                 `json:"Name"`
 	ControllingUserId string                 `json:"ControllingUserId"`
 	Arguments         map[string]interface{} `json:"Arguments"`
+}
+
+// AudioInfo contains information about the selected audio stream
+type AudioInfo struct {
+	Index int `json:"index"`
 }
 
 // SubtitleInfo contains information about the selected subtitle
