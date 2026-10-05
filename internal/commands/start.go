@@ -23,18 +23,32 @@ import (
 	ffmpeg "github.com/u2takey/ffmpeg-go"
 )
 
+// playbackSession holds the context of a playback
+type playbackSession struct {
+	player              *player.Player
+	done                chan struct{} // closed once the playback has released its player
+	itemID              string
+	itemInfo            *jellyfin.ItemInfo
+	mediaSourceId       string
+	audioStreamIndex    *int64
+	subtitleStreamIndex *int64
+}
+
 var (
-	// Global player state for handling commands
-	activePlayer              *player.Player
-	activePlaybackDone        chan struct{} // closed once the active playback has released its player
-	activeItemID              string
-	activeItemInfo            *jellyfin.ItemInfo
-	activeMediaSourceId       string
-	activeAudioStreamIndex    *int64
-	activeSubtitleStreamIndex *int64
-	playerLock                = &sync.Mutex{}
-	activeScreensaver         *screensaver.Screensaver
+	// Global player state for handling commands, guarded by playerLock
+	activeSession *playbackSession
+	playerLock    = &sync.Mutex{}
+	// playLock serializes Play commands, so only one replaces the active playback at a time
+	playLock          = &sync.Mutex{}
+	activeScreensaver *screensaver.Screensaver
 )
+
+// getActiveSession returns the active playback session, or nil
+func getActiveSession() *playbackSession {
+	playerLock.Lock()
+	defer playerLock.Unlock()
+	return activeSession
+}
 
 func NewStartCmd(configDir *string) *cobra.Command {
 	cmd := &cobra.Command{
@@ -212,37 +226,36 @@ func handlePlayCommand(playData jellyfin.PlayCommandData, client *jellyfin.Clien
 	slog.Debug("Item info", "context", itemInfo)
 
 	// Store item info and media source ID for later use
-	activeItemInfo = itemInfo
+	session := &playbackSession{
+		itemID:   itemID,
+		itemInfo: itemInfo,
+	}
 	if playData.MediaSourceId != "" {
-		activeMediaSourceId = playData.MediaSourceId
+		session.mediaSourceId = playData.MediaSourceId
 	} else if len(itemInfo.MediaSources) > 0 {
-		activeMediaSourceId = itemInfo.MediaSources[0].Id
+		session.mediaSourceId = itemInfo.MediaSources[0].Id
 	}
 
-	slog.Debug("Media source", "id", activeMediaSourceId)
+	slog.Debug("Media source", "id", session.mediaSourceId)
 
 	// Get audio info
 	audio := client.GetAudioInfo(playData, itemInfo)
 	if audio != nil {
 		idx := int64(audio.Index)
-		activeAudioStreamIndex = &idx
+		session.audioStreamIndex = &idx
 		slog.Debug("Audio info", "context", audio)
-	} else {
-		activeAudioStreamIndex = nil
 	}
 
 	// Get subtitle info
 	subtitle := client.GetSubtitleInfo(playData, itemInfo)
 	if subtitle != nil {
 		idx := int64(subtitle.Index)
-		activeSubtitleStreamIndex = &idx
+		session.subtitleStreamIndex = &idx
 		slog.Debug("Subtitle info", "context", subtitle)
-	} else {
-		activeSubtitleStreamIndex = nil
 	}
 
 	// Get the direct stream URL
-	videoStreamURL := client.GetVideoDirectStreamURL(activeMediaSourceId)
+	videoStreamURL := client.GetVideoDirectStreamURL(session.mediaSourceId)
 	slog.Debug("Video URL", "url", videoStreamURL)
 
 	// Get start position from playData
@@ -259,19 +272,18 @@ func handlePlayCommand(playData jellyfin.PlayCommandData, client *jellyfin.Clien
 
 	// Burn external subtitles if enabled (slow and CPU intensive)
 	if cfg.BurnExternalSubtitles && subtitle != nil && subtitle.External {
-		return playJellyfinVideoWithExternalSubtitle(videoStreamURL, subtitle, itemID, client, cfg, startPositionMs)
+		return playJellyfinVideoWithExternalSubtitle(videoStreamURL, subtitle, session, client, cfg, startPositionMs)
 	}
 
-	return playJellyfinVideo(videoStreamURL, subtitle, itemID, client, cfg, startPositionMs)
+	return playJellyfinVideo(videoStreamURL, subtitle, session, client, cfg, startPositionMs)
 }
 
-func UpdatePlaybackStatus(client *jellyfin.Client, player *player.Player) {
-	itemID := activeItemID
-	state := player.GetState()
+func UpdatePlaybackStatus(client *jellyfin.Client, session *playbackSession) {
+	state := session.player.GetState()
 	positionMs := state.GetCurrentPositionMs()
 	positionTicks := int64(positionMs) * 10000
 
-	if err := client.ReportPlaybackProgress(itemID, activeMediaSourceId, activeAudioStreamIndex, activeSubtitleStreamIndex, positionTicks, state.IsPaused); err != nil {
+	if err := client.ReportPlaybackProgress(session.itemID, session.mediaSourceId, session.audioStreamIndex, session.subtitleStreamIndex, positionTicks, state.IsPaused); err != nil {
 		slog.Warn("Failed to report playback progress", "error", err)
 	} else {
 		slog.Debug("Reported playback progress", "paused", state.IsPaused, "positionMs", positionMs)
@@ -285,13 +297,11 @@ func StopPlayback(player *player.Player) {
 }
 
 func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client *jellyfin.Client) error {
-	playerLock.Lock()
-	player := activePlayer
-	playerLock.Unlock()
-
-	if player == nil {
+	session := getActiveSession()
+	if session == nil {
 		return fmt.Errorf("no active player")
 	}
+	player := session.player
 
 	command := playstateData.Command
 	slog.Debug("Received Playstate command", "command", command)
@@ -301,17 +311,17 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 		if err := player.Pause(); err != nil {
 			return fmt.Errorf("failed to pause: %w", err)
 		}
-		UpdatePlaybackStatus(client, player)
+		UpdatePlaybackStatus(client, session)
 	case "Unpause":
 		if err := player.Unpause(); err != nil {
 			return fmt.Errorf("failed to unpause: %w", err)
 		}
-		UpdatePlaybackStatus(client, player)
+		UpdatePlaybackStatus(client, session)
 	case "PlayPause":
 		if err := player.TogglePause(); err != nil {
 			return fmt.Errorf("failed to toggle pause: %w", err)
 		}
-		UpdatePlaybackStatus(client, player)
+		UpdatePlaybackStatus(client, session)
 	case "Stop":
 		StopPlayback(player)
 	case "NextTrack":
@@ -335,7 +345,7 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 				return fmt.Errorf("failed to seek: %w", err)
 			}
 		}
-		UpdatePlaybackStatus(client, player)
+		UpdatePlaybackStatus(client, session)
 	default:
 		slog.Warn("Unknown playstate command", "command", command)
 	}
@@ -344,9 +354,11 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 }
 
 func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jellyfin.Client) error {
-	playerLock.Lock()
-	p := activePlayer
-	playerLock.Unlock()
+	session := getActiveSession()
+	var p *player.Player
+	if session != nil {
+		p = session.player
+	}
 
 	command := generalData.Name
 	slog.Debug("Received General command", "command", command)
@@ -402,7 +414,7 @@ func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jelly
 			}
 
 			// Convert Jellyfin subtitle index to VLC subtitle index
-			subtitleIndex, err := client.GetSubtitleIndexInStreamSubtitles(streamSubtitleIndex, activeMediaSourceId, activeItemInfo)
+			subtitleIndex, err := client.GetSubtitleIndexInStreamSubtitles(streamSubtitleIndex, session.mediaSourceId, session.itemInfo)
 			if err != nil {
 				return fmt.Errorf("failed to convert subtitle index: %w", err)
 			}
@@ -421,15 +433,20 @@ func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jelly
 	return nil
 }
 
-func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID string, client *jellyfin.Client, cfg *config.Config, startPositionMs int64) error {
+func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, session *playbackSession, client *jellyfin.Client, cfg *config.Config, startPositionMs int64) error {
+	itemID := session.itemID
+
+	// Hold playLock until this playback is the active one, so concurrent
+	// Play commands can't both replace the same previous playback
+	playLock.Lock()
+	unlockPlay := sync.OnceFunc(playLock.Unlock)
+	defer unlockPlay()
+
 	// Stop any existing playback and wait for it to release its player,
 	// as libVLC uses a single global instance
-	playerLock.Lock()
-	previousPlayer, previousDone := activePlayer, activePlaybackDone
-	playerLock.Unlock()
-	if previousPlayer != nil {
-		StopPlayback(previousPlayer)
-		<-previousDone
+	if previous := getActiveSession(); previous != nil {
+		StopPlayback(previous.player)
+		<-previous.done
 	}
 
 	// Hide screensaver when playback starts
@@ -453,16 +470,15 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 	}
 
 	subtitleTempPath := fmt.Sprintf("/tmp/%s.srt", itemID)
-	playbackDone := make(chan struct{})
+	session.player = p
+	session.done = make(chan struct{})
 
 	defer func() {
-		defer close(playbackDone)
+		defer close(session.done)
 
 		playerLock.Lock()
-		if activePlayer == p {
-			activePlayer = nil
-			activePlaybackDone = nil
-			activeItemID = ""
+		if activeSession == session {
+			activeSession = nil
 		}
 		playerLock.Unlock()
 		p.Release()
@@ -475,12 +491,11 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 		}
 	}()
 
-	// Set the global active player and playback context
+	// Set the global active playback session
 	playerLock.Lock()
-	activePlayer = p
-	activePlaybackDone = playbackDone
-	activeItemID = itemID
+	activeSession = session
 	playerLock.Unlock()
+	unlockPlay()
 
 	// Load media from URL
 	media, err := p.LoadMediaFromURL(mediaURL)
@@ -534,7 +549,7 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 
 	if subtitle != nil && !subtitle.External {
 		// Convert Jellyfin subtitle index to VLC subtitle index
-		subtitleIndex, err := client.GetSubtitleIndexInStreamSubtitles(subtitle.Index, activeMediaSourceId, activeItemInfo)
+		subtitleIndex, err := client.GetSubtitleIndexInStreamSubtitles(subtitle.Index, session.mediaSourceId, session.itemInfo)
 		if err != nil {
 			slog.Warn("Failed to convert subtitle index", "error", err)
 		}
@@ -545,7 +560,7 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 
 	// Report playback start to Jellyfin with the actual start position
 	startPositionTicks := startPositionMs * 10000
-	if err := client.ReportPlaybackStart(itemID, activeMediaSourceId, activeAudioStreamIndex, activeSubtitleStreamIndex, startPositionTicks); err != nil {
+	if err := client.ReportPlaybackStart(itemID, session.mediaSourceId, session.audioStreamIndex, session.subtitleStreamIndex, startPositionTicks); err != nil {
 		slog.Warn("Failed to report playback start", "error", err)
 	}
 
@@ -565,10 +580,10 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 	return nil
 }
 
-func playJellyfinVideoWithExternalSubtitle(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID string, client *jellyfin.Client, cfg *config.Config, startPositionMs int64) error {
+func playJellyfinVideoWithExternalSubtitle(mediaURL string, subtitle *jellyfin.SubtitleInfo, session *playbackSession, client *jellyfin.Client, cfg *config.Config, startPositionMs int64) error {
 	slog.Info("Burning external subtitles into video stream...")
 
-	subtitleTempPath := fmt.Sprintf("/tmp/%s.srt", itemID)
+	subtitleTempPath := fmt.Sprintf("/tmp/%s.srt", session.itemID)
 	err := downloadSubtitle(*subtitle.URL, subtitleTempPath)
 	if err != nil {
 		return err
@@ -585,7 +600,7 @@ func playJellyfinVideoWithExternalSubtitle(mediaURL string, subtitle *jellyfin.S
 		return fmt.Errorf("failed to start stream with burned subtitles: %w", err)
 	}
 
-	return playJellyfinVideo(streamURL, nil, itemID, client, cfg, startPositionMs)
+	return playJellyfinVideo(streamURL, nil, session, client, cfg, startPositionMs)
 }
 
 func downloadSubtitle(url, path string) error {
