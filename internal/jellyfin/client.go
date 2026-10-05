@@ -37,7 +37,7 @@ func NewClient(serverURL, accessToken, userID, deviceID, clientName, deviceName 
 	}
 }
 
-// makeAuthHeader creates the X-Emby-Authorization header
+// makeAuthHeader creates the Authorization header
 func (c *Client) makeAuthHeader() string {
 	if c.AccessToken != "" {
 		return fmt.Sprintf(
@@ -88,13 +88,13 @@ func (c *Client) GetItemInfo(itemID string) (*ItemInfo, error) {
 
 // GetVideoDirectStreamURL returns the direct stream URL for an item
 func (c *Client) GetVideoDirectStreamURL(itemID string) string {
-	return fmt.Sprintf("%s/Videos/%s/stream?static=true&DeviceId=%s&api_key=%s",
+	return fmt.Sprintf("%s/Videos/%s/stream?static=true&DeviceId=%s&ApiKey=%s",
 		c.ServerURL, itemID, c.DeviceID, c.AccessToken)
 }
 
 // GetSubtitleDownloadURL returns the direct stream URL for a subtitle
 func (c *Client) GetSubtitleDownloadURL(itemID, mediaSourceID string, streamIndex int) string {
-	return fmt.Sprintf("%s/Videos/%s/%s/Subtitles/%d/Stream.srt?DeviceId=%s&api_key=%s",
+	return fmt.Sprintf("%s/Videos/%s/%s/Subtitles/%d/Stream.srt?DeviceId=%s&ApiKey=%s",
 		c.ServerURL, itemID, mediaSourceID, streamIndex, c.DeviceID, c.AccessToken)
 }
 
@@ -461,7 +461,7 @@ func (c *Client) ConnectWebSocket(ctx context.Context, handler MessageHandler) e
 		wsScheme = "wss"
 	}
 
-	wsURL := fmt.Sprintf("%s://%s/socket?api_key=%s&device_id=%s", wsScheme, u.Host, c.AccessToken, c.DeviceID)
+	wsURL := fmt.Sprintf("%s://%s/socket?ApiKey=%s&deviceId=%s", wsScheme, u.Host, c.AccessToken, c.DeviceID)
 
 	slog.Info("Connecting to WebSocket", "url", wsURL)
 

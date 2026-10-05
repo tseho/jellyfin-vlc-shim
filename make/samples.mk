@@ -1,7 +1,9 @@
 assets/source.mov:
-	wget -O assets/source.mov https://download.blender.org/peach/bigbuckbunny_movies/big_buck_bunny_1080p_h264.mov
+	wget -O assets/source.zip https://download.blender.org/peach/bigbuckbunny_movies/big_buck_bunny_1080p_h264.mov.zip
+	unzip assets/source.zip -d assets
+	mv assets/big_buck_bunny_1080p_h264.mov assets/source.mov
 
-tests/jellyfin/media/mkv_1080_H264_aac/mkv_1080_H264_aac.mkv:
+tests/jellyfin/media/mkv_1080_H264_aac/mkv_1080_H264_aac.mkv: assets/source.mov
 	mkdir -p tests/jellyfin/media/mkv_1080_H264_aac
 	ffmpeg -y \
 		-i assets/source.mov \
@@ -12,7 +14,7 @@ tests/jellyfin/media/mkv_1080_H264_aac/mkv_1080_H264_aac.mkv:
 		-c:a aac \
 		tests/jellyfin/media/mkv_1080_H264_aac/mkv_1080_H264_aac.mkv
 
-tests/jellyfin/media/mkv_1080_H265_aac_srt/mkv_1080_H265_aac_srt.mkv:
+tests/jellyfin/media/mkv_1080_H265_aac_srt/mkv_1080_H265_aac_srt.mkv: assets/source.mov
 	mkdir -p tests/jellyfin/media/mkv_1080_H265_aac_srt
 	ffmpeg -y \
 		-i assets/source.mov \
@@ -35,7 +37,7 @@ tests/jellyfin/media/mkv_1080_H265_aac_srt/mkv_1080_H265_aac_srt.mkv:
 		-metadata:s:s:1 language=eng -metadata:s:s:1 title="English (SRT)" \
 		tests/jellyfin/media/mkv_1080_H265_aac_srt/mkv_1080_H265_aac_srt.mkv
 
-tests/jellyfin/media/mkv_1080_H265_aac_ass/mkv_1080_H265_aac_ass.mkv:
+tests/jellyfin/media/mkv_1080_H265_aac_ass/mkv_1080_H265_aac_ass.mkv: assets/source.mov
 	mkdir -p tests/jellyfin/media/mkv_1080_H265_aac_ass
 	ffmpeg -y \
 		-i assets/source.mov \
@@ -58,7 +60,7 @@ tests/jellyfin/media/mkv_1080_H265_aac_ass/mkv_1080_H265_aac_ass.mkv:
 		-metadata:s:s:1 language=eng -metadata:s:s:1 title="English (ASS)" \
 		tests/jellyfin/media/mkv_1080_H265_aac_ass/mkv_1080_H265_aac_ass.mkv
 
-tests/jellyfin/media/mp4_1080_H265_aac_mov_text/mp4_1080_H265_aac_mov_text.mp4:
+tests/jellyfin/media/mp4_1080_H265_aac_mov_text/mp4_1080_H265_aac_mov_text.mp4: assets/source.mov
 	mkdir -p tests/jellyfin/media/mp4_1080_H265_aac_mov_text
 	ffmpeg -y \
 		-i assets/source.mov \
@@ -81,7 +83,7 @@ tests/jellyfin/media/mp4_1080_H265_aac_mov_text/mp4_1080_H265_aac_mov_text.mp4:
 		-metadata:s:s:1 language=eng -metadata:s:s:1 title="English (mov_text)" \
 		tests/jellyfin/media/mp4_1080_H265_aac_mov_text/mp4_1080_H265_aac_mov_text.mp4
 
-tests/jellyfin/media/mp4_1080_H265_aac_ext_srt/mp4_1080_H265_aac_ext_srt.mp4:
+tests/jellyfin/media/mp4_1080_H265_aac_ext_srt/mp4_1080_H265_aac_ext_srt.mp4: assets/source.mov
 	mkdir -p tests/jellyfin/media/mp4_1080_H265_aac_ext_srt
 	ffmpeg -y \
 		-i assets/source.mov \

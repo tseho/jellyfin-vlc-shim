@@ -7,3 +7,13 @@ config/data/library.db-wal
 config/data/playlists
 config/data/subtitles
 config/metadata
+config/.jellyfin-data
+config/config/.jellyfin-config
+config/config/database.xml
+config/config/migrations.xml.backup
+config/data/.jellyfin-data
+config/data/library.db.old
+config/data/library.db.old-shm
+config/data/library.db.old-wal
+config/plugins/.jellyfin-plugin
+config/root/.jellyfin-root

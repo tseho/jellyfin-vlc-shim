@@ -54,3 +54,12 @@ Options can be set in `~/.config/jellyfin-vlc-shim/configuration.json`.
 
 - `The DISPLAY environment variable is missing`: On raspbian, you need to setup
 `DISPLAY=:0` & `XAUTHORITY=~/.Xauthority`.
+
+## Development
+
+```
+sudo apt install libvlc-dev
+make samples
+make build
+make tests
+```

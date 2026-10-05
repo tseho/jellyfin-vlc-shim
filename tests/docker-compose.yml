@@ -1,6 +1,6 @@
 services:
   jellyfin:
-    image: jellyfin/jellyfin:10.10
+    image: jellyfin/jellyfin:12.1
     ports:
       - "8096:8096"
       - "7359:7359/udp"  # Local network discovery

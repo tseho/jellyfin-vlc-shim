@@ -27,7 +27,7 @@ func Authenticate(serverURL, username, password, deviceID, clientName, deviceNam
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Emby-Authorization", fmt.Sprintf(`MediaBrowser Client="%s", Device="%s", DeviceId="%s", Version="0.0.1"`, clientName, deviceName, deviceID))
+	req.Header.Set("Authorization", fmt.Sprintf(`MediaBrowser Client="%s", Device="%s", DeviceId="%s", Version="0.0.1"`, clientName, deviceName, deviceID))
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
