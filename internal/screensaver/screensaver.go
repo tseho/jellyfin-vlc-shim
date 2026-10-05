@@ -22,7 +22,7 @@ const (
 
 // Screensaver displays a black screen with the current time.
 // Ebitengine only allows one game per process, so the screensaver window lives
-// for the whole process and is hidden (minimized) during playback.
+// for the whole process and stops redrawing during playback, while VLC covers it.
 type Screensaver struct {
 	visible atomic.Bool
 	quit    atomic.Bool
@@ -63,7 +63,7 @@ func (s *Screensaver) Run() error {
 	return nil
 }
 
-// Show shows the screensaver
+// Show resumes drawing the screensaver
 func (s *Screensaver) Show() {
 	if !s.visible.Swap(true) {
 		slog.Info("Showing screensaver")
@@ -71,7 +71,7 @@ func (s *Screensaver) Show() {
 	}
 }
 
-// Hide hides the screensaver
+// Hide stops drawing the screensaver
 func (s *Screensaver) Hide() {
 	if s.visible.Swap(false) {
 		slog.Info("Hiding screensaver")
@@ -119,16 +119,14 @@ func (g *Game) Update() error {
 		return ebiten.Termination
 	}
 
-	// Apply visibility changes requested by Show/Hide
+	// Apply visibility changes requested by Show/Hide.
+	// The window is never minimized: on Linux, minimizing blocks until the window
+	// manager iconifies the window, which never happens without one, and VLC's
+	// fullscreen window covers the screensaver anyway.
 	if visible := g.screensaver.visible.Load(); visible != g.shown {
 		g.shown = visible
 		if visible {
-			ebiten.RestoreWindow()
-			ebiten.SetFullscreen(true)
 			g.needsRedraw = true
-		} else {
-			ebiten.SetFullscreen(false)
-			ebiten.MinimizeWindow()
 		}
 	}
 
@@ -194,8 +192,12 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 // Layout returns the game's logical screen size
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	// Store the actual screen dimensions
-	g.screenWidth = outsideWidth
-	g.screenHeight = outsideHeight
+	// Store the actual screen dimensions, and redraw when they change
+	// (e.g. when the window becomes fullscreen after the first frame)
+	if outsideWidth != g.screenWidth || outsideHeight != g.screenHeight {
+		g.screenWidth = outsideWidth
+		g.screenHeight = outsideHeight
+		g.needsRedraw = true
+	}
 	return outsideWidth, outsideHeight
 }
