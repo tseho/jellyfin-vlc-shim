@@ -47,5 +47,5 @@ jobs:
             bin/jellyfin-vlc-shim-linux-amd64
             bin/jellyfin-vlc-shim-linux-arm64
           draft: false
-          prerelease: true
+          prerelease: false
           generate_release_notes: true
