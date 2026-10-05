@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -476,6 +477,41 @@ func (c *Client) ConnectWebSocket(ctx context.Context, handler MessageHandler) e
 
 	done := make(chan struct{})
 
+	// The connection supports only one concurrent writer
+	var writeLock sync.Mutex
+	sendKeepAlive := func() error {
+		writeLock.Lock()
+		defer writeLock.Unlock()
+		return conn.WriteJSON(map[string]string{
+			"MessageType": "KeepAlive",
+		})
+	}
+
+	// The periodic keep-alive must only be started once, even if the server
+	// sends ForceKeepAlive several times
+	var keepAliveOnce sync.Once
+	startPeriodicKeepAlive := func(interval time.Duration) {
+		keepAliveOnce.Do(func() {
+			go func() {
+				ticker := time.NewTicker(interval)
+				defer ticker.Stop()
+
+				for {
+					select {
+					case <-ticker.C:
+						if err := sendKeepAlive(); err != nil {
+							slog.Error("Error sending periodic keep-alive", "error", err)
+							return
+						}
+						slog.Debug("Sent periodic KeepAlive")
+					case <-done:
+						return
+					}
+				}
+			}()
+		})
+	}
+
 	// Read messages
 	go func() {
 		defer close(done)
@@ -491,37 +527,20 @@ func (c *Client) ConnectWebSocket(ctx context.Context, handler MessageHandler) e
 			switch msg.MessageType {
 			case "ForceKeepAlive":
 				//slog.Debug("Sending KeepAlive response...")
-				keepAlive := map[string]string{
-					"MessageType": "KeepAlive",
-				}
-				if err := conn.WriteJSON(keepAlive); err != nil {
+				if err := sendKeepAlive(); err != nil {
 					slog.Error("Error sending keep-alive", "error", err)
 					return
 				}
 
-				// Start periodic keep-alive
+				// Start periodic keep-alive, at half the server timeout
 				if dataMap, ok := msg.Data.(map[string]interface{}); ok {
 					if timeoutSec, ok := dataMap["Timeout"].(float64); ok {
-						go func() {
-							ticker := time.NewTicker(time.Duration(timeoutSec/2) * time.Second)
-							defer ticker.Stop()
-
-							for {
-								select {
-								case <-ticker.C:
-									keepAlive := map[string]string{
-										"MessageType": "KeepAlive",
-									}
-									if err := conn.WriteJSON(keepAlive); err != nil {
-										slog.Error("Error sending periodic keep-alive", "error", err)
-										return
-									}
-									slog.Debug("Sent periodic KeepAlive")
-								case <-done:
-									return
-								}
-							}
-						}()
+						interval := time.Duration(timeoutSec * float64(time.Second) / 2)
+						if interval > 0 {
+							startPeriodicKeepAlive(interval)
+						} else {
+							slog.Warn("Invalid keep-alive timeout", "timeout", timeoutSec)
+						}
 					}
 				}
 			case "KeepAlive":
@@ -542,8 +561,10 @@ func (c *Client) ConnectWebSocket(ctx context.Context, handler MessageHandler) e
 	case <-ctx.Done():
 		slog.Info("Closing WebSocket...")
 		// Send close message gracefully
+		writeLock.Lock()
 		err := conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		writeLock.Unlock()
 		if err != nil {
 			slog.Warn("Error sending close message", "error", err)
 		}
