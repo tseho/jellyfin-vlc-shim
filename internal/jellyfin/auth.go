@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"jellyfin-vlc-shim/internal/version"
 )
 
 // Authenticate authenticates with the Jellyfin server and returns the authentication result
@@ -27,7 +29,7 @@ func Authenticate(serverURL, username, password, deviceID, clientName, deviceNam
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf(`MediaBrowser Client="%s", Device="%s", DeviceId="%s", Version="0.0.1"`, clientName, deviceName, deviceID))
+	req.Header.Set("Authorization", fmt.Sprintf(`MediaBrowser Client="%s", Device="%s", DeviceId="%s", Version="%s"`, clientName, deviceName, deviceID, version.Version))
 
 	client := &http.Client{}
 	resp, err := client.Do(req)

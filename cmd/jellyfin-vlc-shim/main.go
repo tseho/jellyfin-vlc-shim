@@ -27,6 +27,7 @@ func main() {
 
 	rootCmd.AddCommand(commands.NewAuthCmd(&configDir))
 	rootCmd.AddCommand(commands.NewPlayCmd(&configDir))
+	rootCmd.AddCommand(commands.NewVersionCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

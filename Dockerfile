@@ -17,6 +17,8 @@ ENV GOOS=linux
 ENV GOARCH=${ARCH}
 ENV CGO_ENABLED=1
 
+ARG VERSION=dev
+
 WORKDIR /jellyfin-vlc-shim
 
 COPY go.mod go.sum ./
@@ -25,4 +27,4 @@ RUN go mod download
 COPY cmd cmd
 COPY internal internal
 
-RUN go build -o bin/jellyfin-vlc-shim cmd/jellyfin-vlc-shim/main.go
+RUN go build -ldflags "-X jellyfin-vlc-shim/internal/version.Version=${VERSION}" -o bin/jellyfin-vlc-shim cmd/jellyfin-vlc-shim/main.go

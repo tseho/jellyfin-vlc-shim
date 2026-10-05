@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"jellyfin-vlc-shim/internal/version"
+
 	"github.com/gorilla/websocket"
 )
 
@@ -42,13 +44,13 @@ func NewClient(serverURL, accessToken, userID, deviceID, clientName, deviceName 
 func (c *Client) makeAuthHeader() string {
 	if c.AccessToken != "" {
 		return fmt.Sprintf(
-			`MediaBrowser Client="%s", Device="%s", DeviceId="%s", Version="0.0.1", Token="%s"`,
-			c.ClientName, c.DeviceName, c.DeviceID, c.AccessToken,
+			`MediaBrowser Client="%s", Device="%s", DeviceId="%s", Version="%s", Token="%s"`,
+			c.ClientName, c.DeviceName, c.DeviceID, version.Version, c.AccessToken,
 		)
 	}
 	return fmt.Sprintf(
-		`MediaBrowser Client="%s", Device="%s", DeviceId="%s", Version="0.0.1"`,
-		c.ClientName, c.DeviceName, c.DeviceID,
+		`MediaBrowser Client="%s", Device="%s", DeviceId="%s", Version="%s"`,
+		c.ClientName, c.DeviceName, c.DeviceID, version.Version,
 	)
 }
 
