@@ -370,22 +370,28 @@ func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jelly
 		}
 		if indexValue, ok := generalData.Arguments["Index"]; ok {
 			// The index could be a string or a number
-			var audioIndex int
+			var streamAudioIndex int
 			switch v := indexValue.(type) {
 			case string:
 				// Parse string to int
-				if _, err := fmt.Sscanf(v, "%d", &audioIndex); err != nil {
+				if _, err := fmt.Sscanf(v, "%d", &streamAudioIndex); err != nil {
 					return fmt.Errorf("failed to parse audio index: %w", err)
 				}
 			case float64:
-				audioIndex = int(v)
+				streamAudioIndex = int(v)
 			case int:
-				audioIndex = v
+				streamAudioIndex = v
 			default:
 				return fmt.Errorf("unexpected type for audio index: %T", indexValue)
 			}
 
-			slog.Info("Setting audio stream index", "index", audioIndex)
+			// Convert Jellyfin audio index to VLC audio index
+			audioIndex, err := client.GetAudioIndexInStreamAudios(streamAudioIndex, session.mediaSourceId, session.itemInfo)
+			if err != nil {
+				return fmt.Errorf("failed to convert audio index: %w", err)
+			}
+
+			slog.Info("Setting audio stream", "jellyfinIndex", streamAudioIndex, "vlcIndex", audioIndex)
 			if err := p.EnableAudio(audioIndex); err != nil {
 				return fmt.Errorf("failed to enable audio: %w", err)
 			}
@@ -544,6 +550,16 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, session
 		slog.Debug("Seeking to start position", "positionMs", startPositionMs)
 		if err := p.SeekTo(startPositionMs); err != nil {
 			slog.Warn("Failed to seek to start position", "error", err, "positionMs", startPositionMs)
+		}
+	}
+
+	if session.audioStreamIndex != nil {
+		// Convert Jellyfin audio index to VLC audio index
+		audioIndex, err := client.GetAudioIndexInStreamAudios(int(*session.audioStreamIndex), session.mediaSourceId, session.itemInfo)
+		if err != nil {
+			slog.Warn("Failed to convert audio index", "error", err)
+		} else if err := p.EnableAudio(audioIndex); err != nil {
+			slog.Warn("Failed to enable audio", "error", err)
 		}
 	}
 

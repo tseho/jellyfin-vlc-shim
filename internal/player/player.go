@@ -12,6 +12,9 @@ import (
 	vlc "github.com/adrg/libvlc-go/v3"
 )
 
+// Maximum time to wait for VLC to discover the audio tracks
+const audioTrackDiscoveryTimeout = 5 * time.Second
+
 // State represents the playback state of the player
 type State struct {
 	IsPaused       bool
@@ -252,18 +255,46 @@ func (p *Player) SeekTo(positionMs int64) error {
 	return nil
 }
 
-// EnableAudio enables the specified audio track by index
+// EnableAudio enables the audio track at the given index, starting from 1, in the list of audio tracks
 func (p *Player) EnableAudio(index int) error {
 	slog.Debug("Enable audio track", "index", index)
+
+	// Wait for audio tracks to be discovered
+	deadline := time.Now().Add(audioTrackDiscoveryTimeout)
+	for {
+		count, err := p.player.AudioTrackCount()
+		if (err == nil && count > 0) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
-	if err := p.player.SetAudioTrack(index); err != nil {
-		return fmt.Errorf("failed to set audio track: %w", err)
+	tracks, err := p.player.AudioTrackDescriptors()
+	if err != nil {
+		return fmt.Errorf("failed to get audio tracks: %w", err)
+	}
+	tracksJSON, _ := json.Marshal(tracks)
+	slog.Debug("Available audio tracks", "tracks", string(tracksJSON))
+
+	// Skip the "Disable" track (ID -1)
+	trackIndex := 0
+	for _, track := range tracks {
+		if track.ID != -1 {
+			trackIndex++
+			if trackIndex == index {
+				slog.Debug("Selected audio track", "track", track)
+				if err := p.player.SetAudioTrack(track.ID); err != nil {
+					return fmt.Errorf("failed to set audio track: %w", err)
+				}
+				return nil
+			}
+		}
 	}
 
-	return nil
+	return fmt.Errorf("audio track %d not found", index)
 }
 
 // EnableSubtitle enables the specified subtitle track

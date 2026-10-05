@@ -102,6 +102,18 @@ func (c *Client) GetSubtitleDownloadURL(itemID, mediaSourceID string, streamInde
 // GetSubtitleIndexInStreamSubtitles converts a Jellyfin subtitle stream index to an index, starting from 1,
 // of the stream in the list of subtitles
 func (c *Client) GetSubtitleIndexInStreamSubtitles(index int, mediaSourceId string, itemInfo *ItemInfo) (int, error) {
+	return getIndexInStreamsOfType("Subtitle", index, mediaSourceId, itemInfo)
+}
+
+// GetAudioIndexInStreamAudios converts a Jellyfin audio stream index to an index, starting from 1,
+// of the stream in the list of audio streams
+func (c *Client) GetAudioIndexInStreamAudios(index int, mediaSourceId string, itemInfo *ItemInfo) (int, error) {
+	return getIndexInStreamsOfType("Audio", index, mediaSourceId, itemInfo)
+}
+
+// getIndexInStreamsOfType converts a Jellyfin stream index to an index, starting from 1,
+// of the stream in the list of internal streams of the same type
+func getIndexInStreamsOfType(streamType string, index int, mediaSourceId string, itemInfo *ItemInfo) (int, error) {
 	if itemInfo == nil {
 		return -1, fmt.Errorf("item info is nil")
 	}
@@ -123,10 +135,10 @@ func (c *Client) GetSubtitleIndexInStreamSubtitles(index int, mediaSourceId stri
 		return -1, fmt.Errorf("media source not found")
 	}
 
-	// Find the subtitle stream and count subtitles before it
+	// Find the stream and count streams of the same type before it
 	actualIndex := 0
 	for _, stream := range mediaSource.MediaStreams {
-		if stream.Type == "Subtitle" && !stream.IsExternal {
+		if stream.Type == streamType && !stream.IsExternal {
 			actualIndex++
 			if stream.Index == index {
 				return actualIndex, nil
@@ -134,7 +146,7 @@ func (c *Client) GetSubtitleIndexInStreamSubtitles(index int, mediaSourceId stri
 		}
 	}
 
-	return -1, fmt.Errorf("subtitle stream with index %d not found", index)
+	return -1, fmt.Errorf("%s stream with index %d not found", strings.ToLower(streamType), index)
 }
 
 // GetAudioInfo returns information about the audio stream
