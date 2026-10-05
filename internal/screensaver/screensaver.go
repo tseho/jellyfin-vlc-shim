@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -15,65 +16,95 @@ import (
 const (
 	fontSize = 48
 	padding  = 40
+	// Maximum time Update waits when there is nothing to redraw
+	idleWait = 5 * time.Second
 )
 
-// Screensaver displays a black screen with the current time
+// Screensaver displays a black screen with the current time.
+// Ebitengine only allows one game per process, so the screensaver window lives
+// for the whole process and is hidden (minimized) during playback.
 type Screensaver struct {
-	running bool
+	visible atomic.Bool
+	quit    atomic.Bool
+	wake    chan struct{}
 }
 
-// New creates a new Screensaver instance
+// New creates a new Screensaver instance, visible by default
 func New() *Screensaver {
-	return &Screensaver{
-		running: false,
+	s := &Screensaver{
+		wake: make(chan struct{}, 1),
 	}
+	s.visible.Store(true)
+	return s
 }
 
-// Start starts the screensaver in fullscreen mode
-func (s *Screensaver) Start() error {
-	if s.running {
-		return nil
-	}
-
+// Run runs the screensaver until Quit is called.
+// It must be called on the main goroutine, and only once.
+func (s *Screensaver) Run() error {
 	slog.Info("Starting screensaver")
-	s.running = true
 
 	ebiten.SetFullscreen(true)
 	ebiten.SetWindowTitle("Jellyfin VLC Shim")
 	ebiten.SetCursorMode(ebiten.CursorModeHidden)
-	ebiten.SetTPS(1)                         // Only update once per second to save CPU (there is an additional sleep in Update)
+	ebiten.SetTPS(1)                         // Only update once per second to save CPU (there is an additional wait in Update)
 	ebiten.SetVsyncEnabled(false)            // Disable VSync to save CPU
 	ebiten.SetScreenClearedEveryFrame(false) // Don't clear screen every frame to save CPU
 
 	game := &Game{
+		screensaver: s,
+		shown:       true,
 		needsRedraw: true,
 	}
 
 	if err := ebiten.RunGame(game); err != nil {
-		s.running = false
 		return fmt.Errorf("failed to run screensaver: %w", err)
 	}
 
 	return nil
 }
 
-// Stop stops the screensaver
-func (s *Screensaver) Stop() {
-	if !s.running {
-		return
+// Show shows the screensaver
+func (s *Screensaver) Show() {
+	if !s.visible.Swap(true) {
+		slog.Info("Showing screensaver")
+		s.notify()
 	}
-
-	slog.Info("Stopping screensaver")
-	s.running = false
 }
 
-// IsRunning returns whether the screensaver is currently running
-func (s *Screensaver) IsRunning() bool {
-	return s.running
+// Hide hides the screensaver
+func (s *Screensaver) Hide() {
+	if s.visible.Swap(false) {
+		slog.Info("Hiding screensaver")
+		s.notify()
+	}
+}
+
+// Quit makes Run return
+func (s *Screensaver) Quit() {
+	s.quit.Store(true)
+	s.notify()
+}
+
+// notify wakes up Update if it is waiting
+func (s *Screensaver) notify() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+// wait blocks until notified or until the timeout expires
+func (s *Screensaver) wait(timeout time.Duration) {
+	select {
+	case <-s.wake:
+	case <-time.After(timeout):
+	}
 }
 
 // Game implements ebiten.Game interface
 type Game struct {
+	screensaver  *Screensaver
+	shown        bool
 	faceSource   *text.GoTextFaceSource
 	face         *text.GoTextFace
 	screenWidth  int
@@ -84,6 +115,23 @@ type Game struct {
 
 // Update updates the game state
 func (g *Game) Update() error {
+	if g.screensaver.quit.Load() {
+		return ebiten.Termination
+	}
+
+	// Apply visibility changes requested by Show/Hide
+	if visible := g.screensaver.visible.Load(); visible != g.shown {
+		g.shown = visible
+		if visible {
+			ebiten.RestoreWindow()
+			ebiten.SetFullscreen(true)
+			g.needsRedraw = true
+		} else {
+			ebiten.SetFullscreen(false)
+			ebiten.MinimizeWindow()
+		}
+	}
+
 	ebiten.SetCursorMode(ebiten.CursorModeHidden)
 
 	// Check if time has changed
@@ -93,9 +141,9 @@ func (g *Game) Update() error {
 		g.needsRedraw = true
 	}
 
-	// Sleep a bit to reduce CPU usage
-	if !g.needsRedraw {
-		time.Sleep(time.Second * 5)
+	// Wait a bit to reduce CPU usage
+	if !g.needsRedraw || !g.shown {
+		g.screensaver.wait(idleWait)
 	}
 
 	return nil
@@ -104,7 +152,7 @@ func (g *Game) Update() error {
 // Draw draws the screensaver
 func (g *Game) Draw(screen *ebiten.Image) {
 	// Only redraw text if time has changed
-	if !g.needsRedraw {
+	if !g.needsRedraw || !g.shown {
 		return
 	}
 

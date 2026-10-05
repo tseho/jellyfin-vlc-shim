@@ -99,20 +99,7 @@ func runClient(configDir string) error {
 	}
 	slog.Debug("Capabilities registered successfully!")
 
-	// Initialize and start screensaver if enabled
-	if cfg.Screensaver {
-		activeScreensaver = screensaver.New()
-
-		// Start screensaver in a separate goroutine
-		go func() {
-			if err := activeScreensaver.Start(); err != nil {
-				slog.Error("Failed to start screensaver", "error", err)
-			}
-		}()
-	}
-
-	// Connect to WebSocket and handle messages
-	return client.ConnectWebSocket(ctx, func(msg jellyfin.WebSocketMessage) error {
+	handleMessage := func(msg jellyfin.WebSocketMessage) error {
 		switch msg.MessageType {
 		case "Play":
 			slog.Debug("Received Play command")
@@ -183,7 +170,26 @@ func runClient(configDir string) error {
 		}
 
 		return nil
-	})
+	}
+
+	if !cfg.Screensaver {
+		// Connect to WebSocket and handle messages
+		return client.ConnectWebSocket(ctx, handleMessage)
+	}
+
+	// The screensaver must run on the main goroutine, so the WebSocket runs in the background
+	activeScreensaver = screensaver.New()
+	clientErr := make(chan error, 1)
+	go func() {
+		clientErr <- client.ConnectWebSocket(ctx, handleMessage)
+		activeScreensaver.Quit()
+	}()
+
+	if err := activeScreensaver.Run(); err != nil {
+		slog.Error("Failed to run screensaver", "error", err)
+	}
+
+	return <-clientErr
 }
 
 func handlePlayCommand(playData jellyfin.PlayCommandData, client *jellyfin.Client, cfg *config.Config) error {
@@ -426,9 +432,9 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 		<-previousDone
 	}
 
-	// Stop screensaver when playback starts
-	if activeScreensaver != nil && activeScreensaver.IsRunning() {
-		activeScreensaver.Stop()
+	// Hide screensaver when playback starts
+	if activeScreensaver != nil {
+		activeScreensaver.Hide()
 	}
 
 	vlcArgs := []string{}
@@ -463,13 +469,9 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 
 		os.Remove(subtitleTempPath)
 
-		// Restart screensaver after playback ends
-		if activeScreensaver != nil && !activeScreensaver.IsRunning() {
-			go func() {
-				if err := activeScreensaver.Start(); err != nil {
-					slog.Error("Failed to restart screensaver", "error", err)
-				}
-			}()
+		// Show screensaver again after playback ends
+		if activeScreensaver != nil {
+			activeScreensaver.Show()
 		}
 	}()
 
