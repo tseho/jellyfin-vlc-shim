@@ -14,7 +14,7 @@ tests:
 	@yq -i '.screensaver=false' .tmp/config/configuration.json
 	@yq -i '.log_level="warn"' .tmp/config/configuration.json
 	./bin/jellyfin-vlc-shim --config .tmp/config > /dev/null 2>&1 &
-	(cd tests/playwright && npm run test:ui)
+	(cd tests/playwright && npm run test)
 	@killall jellyfin-vlc-shim > /dev/null 2>&1 || true
 	@killall -9 jellyfin-vlc-shim > /dev/null 2>&1 || true
 

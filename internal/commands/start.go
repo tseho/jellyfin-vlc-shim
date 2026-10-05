@@ -26,6 +26,7 @@ import (
 var (
 	// Global player state for handling commands
 	activePlayer              *player.Player
+	activePlaybackDone        chan struct{} // closed once the active playback has released its player
 	activeItemID              string
 	activeItemInfo            *jellyfin.ItemInfo
 	activeMediaSourceId       string
@@ -271,19 +272,10 @@ func UpdatePlaybackStatus(client *jellyfin.Client, player *player.Player) {
 	}
 }
 
-func StopPlayback(client *jellyfin.Client, player *player.Player) {
+// StopPlayback stops the player. The playback goroutine then reports
+// playback stopped to Jellyfin and releases the player.
+func StopPlayback(player *player.Player) {
 	player.Stop()
-
-	itemID := activeItemID
-	state := player.GetState()
-	positionMs := state.GetCurrentPositionMs()
-	positionTicks := int64(positionMs) * 10000
-
-	if err := client.ReportPlaybackStopped(itemID, positionTicks); err != nil {
-		slog.Warn("Failed to report playback stopped", "error", err)
-	} else {
-		slog.Debug("Reported playback stopped", "itemID", itemID)
-	}
 }
 
 func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client *jellyfin.Client) error {
@@ -315,7 +307,7 @@ func handlePlaystateCommand(playstateData jellyfin.PlaystateCommandData, client 
 		}
 		UpdatePlaybackStatus(client, player)
 	case "Stop":
-		StopPlayback(client, player)
+		StopPlayback(player)
 	case "NextTrack":
 		slog.Info("NextTrack not yet implemented")
 	case "PreviousTrack":
@@ -424,19 +416,19 @@ func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jelly
 }
 
 func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID string, client *jellyfin.Client, cfg *config.Config, startPositionMs int64) error {
+	// Stop any existing playback and wait for it to release its player,
+	// as libVLC uses a single global instance
+	playerLock.Lock()
+	previousPlayer, previousDone := activePlayer, activePlaybackDone
+	playerLock.Unlock()
+	if previousPlayer != nil {
+		StopPlayback(previousPlayer)
+		<-previousDone
+	}
+
 	// Stop screensaver when playback starts
 	if activeScreensaver != nil && activeScreensaver.IsRunning() {
 		activeScreensaver.Stop()
-	}
-
-	// Stop any existing player
-	if activePlayer != nil {
-		playerLock.Lock()
-		StopPlayback(client, activePlayer)
-		activePlayer.Release()
-		activePlayer = nil
-		activeItemID = ""
-		playerLock.Unlock()
 	}
 
 	vlcArgs := []string{}
@@ -455,11 +447,17 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 	}
 
 	subtitleTempPath := fmt.Sprintf("/tmp/%s.srt", itemID)
+	playbackDone := make(chan struct{})
 
 	defer func() {
+		defer close(playbackDone)
+
 		playerLock.Lock()
-		activePlayer = nil
-		activeItemID = ""
+		if activePlayer == p {
+			activePlayer = nil
+			activePlaybackDone = nil
+			activeItemID = ""
+		}
 		playerLock.Unlock()
 		p.Release()
 
@@ -478,6 +476,7 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 	// Set the global active player and playback context
 	playerLock.Lock()
 	activePlayer = p
+	activePlaybackDone = playbackDone
 	activeItemID = itemID
 	playerLock.Unlock()
 
@@ -502,10 +501,17 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 		}
 	}
 
-	// Setup end reached event
-	done, err := p.ListenEndReachedEvent()
+	// Setup playback end events
+	done, err := p.ListenPlaybackEndEvents()
 	if err != nil {
 		return err
+	}
+
+	// Playback was stopped while loading the media
+	select {
+	case <-done:
+		return nil
+	default:
 	}
 
 	// Start playing
@@ -543,7 +549,7 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, itemID 
 
 	// Wait for playback to finish
 	<-done
-	slog.Info("Video playback completed")
+	slog.Info("Video playback ended")
 
 	// Get final position from state and report playback stopped
 	state := p.GetState()

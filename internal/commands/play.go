@@ -64,7 +64,7 @@ func playVideo(path string, configDir string) error {
 	defer media.Release()
 
 	// Setup end reached event
-	done, err := p.ListenEndReachedEvent()
+	done, err := p.ListenPlaybackEndEvents()
 	if err != nil {
 		return err
 	}

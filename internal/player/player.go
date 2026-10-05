@@ -39,6 +39,12 @@ type Player struct {
 	state      *State
 	lock       sync.Mutex
 	fullscreen bool
+
+	// ended is closed when playback ends, is stopped or fails
+	ended        chan struct{}
+	endOnce      sync.Once
+	eventManager *vlc.EventManager
+	eventIDs     []vlc.EventID
 }
 
 // Options configures player initialization
@@ -85,6 +91,7 @@ func New(opts *Options) (*Player, error) {
 			SeekOffset:     0,
 		},
 		fullscreen: opts.Fullscreen,
+		ended:      make(chan struct{}),
 	}, nil
 }
 
@@ -93,6 +100,11 @@ func (p *Player) Release() {
 	// Don't call Stop() here - if the window was closed manually,
 	// it will crash with GLXBadWindow. The player is already stopped
 	// when Release() is called from the defer.
+	if p.eventManager != nil {
+		p.eventManager.Detach(p.eventIDs...)
+		p.eventManager = nil
+		p.eventIDs = nil
+	}
 	p.player.Release()
 	vlc.Release()
 }
@@ -161,6 +173,8 @@ func (p *Player) Stop() {
 	p.state.IsPaused = true
 	p.state.PausedAt = time.Now()
 	p.player.Stop()
+	// Don't rely on VLC emitting MediaPlayerStopped (e.g. when the player is idle)
+	p.markEnded()
 	slog.Info("Player stopped")
 }
 
