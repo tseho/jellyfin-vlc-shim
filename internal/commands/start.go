@@ -25,13 +25,37 @@ import (
 
 // playbackSession holds the context of a playback
 type playbackSession struct {
-	player              *player.Player
-	done                chan struct{} // closed once the playback has released its player
-	itemID              string
-	itemInfo            *jellyfin.ItemInfo
-	mediaSourceId       string
+	player        *player.Player
+	done          chan struct{} // closed once the playback has released its player
+	itemID        string
+	itemInfo      *jellyfin.ItemInfo
+	mediaSourceId string
+	// Selected streams, guarded by playerLock once the session is active
 	audioStreamIndex    *int64
-	subtitleStreamIndex *int64
+	subtitleStreamIndex *int64 // -1 when subtitles are disabled
+}
+
+// streamIndexes returns the selected audio and subtitle stream indexes
+func (s *playbackSession) streamIndexes() (audio *int64, subtitle *int64) {
+	playerLock.Lock()
+	defer playerLock.Unlock()
+	return s.audioStreamIndex, s.subtitleStreamIndex
+}
+
+// setAudioStreamIndex records the selected audio stream
+func (s *playbackSession) setAudioStreamIndex(index int) {
+	idx := int64(index)
+	playerLock.Lock()
+	defer playerLock.Unlock()
+	s.audioStreamIndex = &idx
+}
+
+// setSubtitleStreamIndex records the selected subtitle stream, -1 when disabled
+func (s *playbackSession) setSubtitleStreamIndex(index int) {
+	idx := int64(index)
+	playerLock.Lock()
+	defer playerLock.Unlock()
+	s.subtitleStreamIndex = &idx
 }
 
 var (
@@ -283,7 +307,8 @@ func UpdatePlaybackStatus(client *jellyfin.Client, session *playbackSession) {
 	positionMs := state.GetCurrentPositionMs()
 	positionTicks := int64(positionMs) * 10000
 
-	if err := client.ReportPlaybackProgress(session.itemID, session.mediaSourceId, session.audioStreamIndex, session.subtitleStreamIndex, positionTicks, state.IsPaused); err != nil {
+	audioStreamIndex, subtitleStreamIndex := session.streamIndexes()
+	if err := client.ReportPlaybackProgress(session.itemID, session.mediaSourceId, audioStreamIndex, subtitleStreamIndex, positionTicks, state.IsPaused); err != nil {
 		slog.Warn("Failed to report playback progress", "error", err)
 	} else {
 		slog.Debug("Reported playback progress", "paused", state.IsPaused, "positionMs", positionMs)
@@ -395,6 +420,8 @@ func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jelly
 			if err := p.EnableAudio(audioIndex); err != nil {
 				return fmt.Errorf("failed to enable audio: %w", err)
 			}
+			session.setAudioStreamIndex(streamAudioIndex)
+			UpdatePlaybackStatus(client, session)
 		} else {
 			return fmt.Errorf("missing Index argument for SetAudioStreamIndex")
 		}
@@ -419,6 +446,17 @@ func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jelly
 				return fmt.Errorf("unexpected type for subtitle index: %T", indexValue)
 			}
 
+			if streamSubtitleIndex < 0 {
+				// Jellyfin sends -1 to turn subtitles off
+				slog.Info("Disabling subtitles")
+				if err := p.DisableSubtitle(); err != nil {
+					return fmt.Errorf("failed to disable subtitle: %w", err)
+				}
+				session.setSubtitleStreamIndex(-1)
+				UpdatePlaybackStatus(client, session)
+				break
+			}
+
 			// Convert Jellyfin subtitle index to VLC subtitle index
 			subtitleIndex, err := client.GetSubtitleIndexInStreamSubtitles(streamSubtitleIndex, session.mediaSourceId, session.itemInfo)
 			if err != nil {
@@ -429,6 +467,8 @@ func handleGeneralCommand(generalData jellyfin.GeneralCommandData, client *jelly
 			if err := p.EnableSubtitle(subtitleIndex); err != nil {
 				return fmt.Errorf("failed to enable subtitle: %w", err)
 			}
+			session.setSubtitleStreamIndex(streamSubtitleIndex)
+			UpdatePlaybackStatus(client, session)
 		} else {
 			return fmt.Errorf("missing Index argument for SetSubtitleStreamIndex")
 		}
@@ -553,9 +593,9 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, session
 		}
 	}
 
-	if session.audioStreamIndex != nil {
+	if audioStreamIndex, _ := session.streamIndexes(); audioStreamIndex != nil {
 		// Convert Jellyfin audio index to VLC audio index
-		audioIndex, err := client.GetAudioIndexInStreamAudios(int(*session.audioStreamIndex), session.mediaSourceId, session.itemInfo)
+		audioIndex, err := client.GetAudioIndexInStreamAudios(int(*audioStreamIndex), session.mediaSourceId, session.itemInfo)
 		if err != nil {
 			slog.Warn("Failed to convert audio index", "error", err)
 		} else if err := p.EnableAudio(audioIndex); err != nil {
@@ -568,15 +608,15 @@ func playJellyfinVideo(mediaURL string, subtitle *jellyfin.SubtitleInfo, session
 		subtitleIndex, err := client.GetSubtitleIndexInStreamSubtitles(subtitle.Index, session.mediaSourceId, session.itemInfo)
 		if err != nil {
 			slog.Warn("Failed to convert subtitle index", "error", err)
-		}
-		if err := p.EnableSubtitle(subtitleIndex); err != nil {
+		} else if err := p.EnableSubtitle(subtitleIndex); err != nil {
 			slog.Warn("Failed to enable subtitle", "error", err)
 		}
 	}
 
 	// Report playback start to Jellyfin with the actual start position
 	startPositionTicks := startPositionMs * 10000
-	if err := client.ReportPlaybackStart(itemID, session.mediaSourceId, session.audioStreamIndex, session.subtitleStreamIndex, startPositionTicks); err != nil {
+	audioStreamIndex, subtitleStreamIndex := session.streamIndexes()
+	if err := client.ReportPlaybackStart(itemID, session.mediaSourceId, audioStreamIndex, subtitleStreamIndex, startPositionTicks); err != nil {
 		slog.Warn("Failed to report playback start", "error", err)
 	}
 

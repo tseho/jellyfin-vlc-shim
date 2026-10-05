@@ -330,20 +330,33 @@ func (p *Player) EnableSubtitle(index int) error {
 	tracksJSON, _ := json.Marshal(tracks)
 	slog.Debug("Available subtitle tracks", "tracks", string(tracksJSON))
 
-	trackId := -1
+	// Skip the "Disable" track (ID -1)
 	trackIndex := 0
 	for _, track := range tracks {
 		if track.ID != -1 {
 			trackIndex++
 			if trackIndex == index {
-				trackId = track.ID
 				slog.Debug("Selected subtitle track", "track", track)
+				if err := p.player.SetSubtitleTrack(track.ID); err != nil {
+					return fmt.Errorf("failed to set subtitle track: %w", err)
+				}
+				return nil
 			}
 		}
 	}
 
-	if err := p.player.SetSubtitleTrack(trackId); err != nil {
-		return fmt.Errorf("failed to set subtitle track: %w", err)
+	return fmt.Errorf("subtitle track %d not found", index)
+}
+
+// DisableSubtitle disables the subtitles
+func (p *Player) DisableSubtitle() error {
+	slog.Debug("Disable subtitle track")
+
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	if err := p.player.SetSubtitleTrack(-1); err != nil {
+		return fmt.Errorf("failed to disable subtitle track: %w", err)
 	}
 
 	return nil
